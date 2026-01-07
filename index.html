@@ -84,9 +84,7 @@
                 const dd = String(now.getDate()).padStart(2, '0');
                 const dateCode = `${yy}${mm}${dd}`;
                 
-                // Query the latest ticket from this collection to determine sequence
-                // Ideally this should use a separate counter document for atomic increments in high-volume, 
-                // but for this scale, querying latest is acceptable.
+                // Simple latest check
                 const q = query(collection(db, colName), orderBy("timestamp", "desc"), limit(1));
                 const snap = await getDocs(q);
                 
@@ -146,7 +144,6 @@
         async function logSystemAction(message) {
             try {
                 if(!auth.currentUser) return;
-                // Use cached name or fallback to email
                 const displayName = currentUserName || auth.currentUser.email.split('@')[0];
                 await addDoc(collection(db, "logs"), {
                     message: message,
@@ -166,46 +163,36 @@
         // --- SMART TEXTAREA HANDLER ---
         document.addEventListener('keydown', function(e) {
             if (e.target.tagName === 'TEXTAREA' || (e.target.tagName === 'INPUT' && e.target.type === 'text')) {
-                // Formatting Shortcuts
                 if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'i')) {
                     e.preventDefault();
                     const start = e.target.selectionStart;
                     const end = e.target.selectionEnd;
                     const text = e.target.value;
-                    const char = e.key === 'b' ? '**' : '_'; // Markdown style
+                    const char = e.key === 'b' ? '**' : '_';
                     e.target.value = text.substring(0, start) + char + text.substring(start, end) + char + text.substring(end);
                     e.target.selectionStart = start + char.length;
                     e.target.selectionEnd = end + char.length;
                 }
-                
-                // Auto-List Indent (Textarea only)
                 if (e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
                     const cursor = e.target.selectionStart;
                     const text = e.target.value;
                     const currentLineStart = text.lastIndexOf('\n', cursor - 1) + 1;
                     const currentLine = text.substring(currentLineStart, cursor);
                     const match = currentLine.match(/^(\s*)([-*]|\d+\.)\s/);
-                    
                     if (match) {
-                        // Check if empty list item (just the bullet/number)
                         if (currentLine.trim() === match[0].trim()) {
                             e.preventDefault();
-                            // Remove the bullet from current line
                             e.target.value = text.substring(0, currentLineStart) + text.substring(cursor);
                             e.target.selectionStart = e.target.selectionEnd = currentLineStart; 
                             return;
                         }
-
                         e.preventDefault(); 
                         const indent = match[1];
                         let marker = match[2];
-                        
-                        // Increment number if it's a numbered list
                         if (/\d+\./.test(marker)) {
                             const num = parseInt(marker) + 1;
                             marker = num + '.';
                         }
-                        
                         const insertion = `\n${indent}${marker} `;
                         e.target.value = text.substring(0, cursor) + insertion + text.substring(cursor);
                         e.target.selectionStart = e.target.selectionEnd = cursor + insertion.length;
@@ -343,7 +330,6 @@
                     }
                 });
             } else {
-                // Legacy support for single item records
                 const remaining = 1; 
                 html += `
                 <div class="flex items-center justify-between border-b pb-2">
@@ -393,7 +379,6 @@
                             return { ...item, returned: newReturned };
                         });
                     } else {
-                        // Legacy handling
                         const input = document.getElementById(`return-qty-0`);
                         const returning = input ? parseInt(input.value) || 0 : 0;
                         if (returning > 0) {
@@ -420,11 +405,11 @@
                         status: newStatus,
                         updatedAt: serverTimestamp(),
                         returnLogs: arrayUnion(returnLogEntry),
-                        receivers: arrayUnion(receiverEmail) // Add unique receiver
+                        receivers: arrayUnion(receiverEmail) 
                     };
 
                     if (newStatus === "Returned") {
-                        updatePayload.closedBy = receiverEmail; // Main closure
+                        updatePayload.closedBy = receiverEmail; 
                     }
 
                     await updateDoc(doc(db, "operations_requests", currentViewingDocId), updatePayload);
@@ -443,9 +428,18 @@
                         status: newStatus,
                         updatedAt: serverTimestamp()
                     };
+                    const userEmail = auth.currentUser.email;
+
                     if (collectionName === 'operations_requests' && (newStatus === 'Done' || newStatus === 'Closed')) {
-                        updateData.closedBy = auth.currentUser.email;
+                        updateData.closedBy = userEmail;
                     }
+                    if (collectionName === 'health_logs' && newStatus === 'Discharged') {
+                        updateData.dischargedBy = userEmail;
+                    }
+                    if (collectionName === 'visitor_logs' && newStatus === 'Out') {
+                        updateData.loggedOutBy = userEmail;
+                    }
+
                     await updateDoc(doc(db, collectionName, docId), updateData);
                     showToast(`${actionName} successful`, "success");
                     logSystemAction(`Updated status: ${actionName} (${newStatus})`); 
@@ -458,7 +452,6 @@
             currentViewingDocId = docId;
             const modal = document.getElementById('lesson-modal');
             
-            // Populate fields
             const fields = ['subject', 'objective', 'materials', 'instruction', 'guided', 'closure', 'assessment'];
             fields.forEach(f => {
                 const el = document.getElementById('view-' + f);
@@ -469,7 +462,6 @@
             });
 
             document.getElementById('view-teacher').innerText = (data.teacherEmail || "").split('@')[0];
-            // Populate schedule input
             const scheduleInput = document.getElementById('view-schedule');
             if (scheduleInput) {
                 scheduleInput.value = data.implementationDate || "";
@@ -487,7 +479,6 @@
             const teacherFeedbackSection = document.getElementById('teacher-feedback-view');
             const resubmitBtn = document.getElementById('lesson-resubmit-btn');
             
-            // Reset editable state
             document.querySelectorAll('.lesson-input').forEach(el => el.disabled = true);
             resubmitBtn.classList.add('hidden');
 
@@ -495,7 +486,6 @@
                 adminSection.classList.remove('hidden');
                 teacherFeedbackSection.classList.add('hidden');
                 document.getElementById('admin-feedback-input').value = data.adminFeedback || "";
-                // Hide admin buttons if it's a Draft
                 if(data.status === 'Draft') adminSection.classList.add('hidden');
             } else {
                 adminSection.classList.add('hidden');
@@ -506,7 +496,6 @@
                     teacherFeedbackSection.classList.add('hidden');
                 }
 
-                // Edit Mode for Teachers (Drafts or Revisions)
                 if (currentUserRole === 'teacher' && (data.status === 'Revision Needed' || data.status === 'Draft')) {
                     document.querySelectorAll('.lesson-input').forEach(el => {
                         el.disabled = false;
@@ -514,7 +503,6 @@
                         el.classList.add('border', 'p-2', 'bg-white');
                     });
                     resubmitBtn.classList.remove('hidden');
-                    // Change button text based on status
                     const btnHtml = data.status === 'Draft' 
                         ? `<button onclick="updateLessonDraft()" class="flex-1 bg-slate-500 text-white py-2 rounded font-bold hover:bg-slate-600 mr-2">Update Draft</button>
                            <button onclick="resubmitLessonPlan()" class="flex-1 bg-green-600 text-white py-2 rounded font-bold hover:bg-green-700">Submit for Approval</button>`
@@ -571,7 +559,7 @@
             showCustomConfirm("Submit this lesson plan?", async () => {
                 try {
                     const updates = window.getModalLessonData();
-                    updates.status = "Pending"; // Submit makes it pending
+                    updates.status = "Pending";
                     await updateDoc(doc(db, "lesson_plans", currentViewingDocId), updates);
                     showToast("Lesson Plan Submitted", "success");
                     logSystemAction("Teacher submitted lesson plan");
@@ -584,7 +572,6 @@
             if (!currentViewingDocId) return;
             try {
                 const updates = window.getModalLessonData();
-                // Status remains Draft
                 await updateDoc(doc(db, "lesson_plans", currentViewingDocId), updates);
                 showToast("Draft Updated", "success");
                 closeLessonModal();
@@ -601,15 +588,17 @@
             title.innerText = `${reportType} History`;
             content.innerHTML = '<p class="text-center text-gray-500 animate-pulse p-4">Fetching history...</p>';
 
-            let collectionName = "", columns = [], statusFilter = [];
+            let collectionName = "";
+            let columns = [];
+            let statusFilter = null;
 
             if (reportType === "Operations") {
                 collectionName = "operations_requests";
-                columns = ["Ticket", "Type", "Item/Loc", "Status", "Start Time", "End Time", "Logged By", "Closed/Recv By"];
+                columns = ["Ticket", "Type", "Item/Loc", "Status", "Log Action", "Timestamp", "Performed By"];
                 statusFilter = ["Done", "Closed", "Returned"];
             } else if (reportType === "Visitors") {
                 collectionName = "visitor_logs";
-                columns = ["Ticket", "Visitor Name", "Purpose", "Status", "Time In", "Time Out", "Logged By"];
+                columns = ["Ticket", "Visitor Name", "Purpose", "Status", "In Time", "In By", "Out Time", "Out By"];
                 statusFilter = ["Out"];
             } else if (reportType === "Incidents") {
                 collectionName = "safety_logs";
@@ -617,7 +606,7 @@
                 statusFilter = null;
             } else if (reportType === "Health") {
                 collectionName = "health_logs";
-                columns = ["Ticket", "Student", "Symptoms", "Action Taken", "Admitted", "Discharged", "Logged By"];
+                columns = ["Ticket", "Patient", "Symptoms", "Action Taken", "Admitted", "Admitted By", "Discharged", "Discharged By"];
                 statusFilter = ["Discharged"];
             } else if (reportType === "Lesson Plans") {
                 collectionName = "lesson_plans";
@@ -626,69 +615,134 @@
             }
 
             try {
-                const q = query(collection(db, collectionName), limit(100)); // Increased limit
+                // Fixed: Use simple query to prevent index errors
+                const q = query(collection(db, collectionName), limit(100));
                 const querySnapshot = await getDocs(q);
                 if (querySnapshot.empty) { content.innerHTML = '<p class="text-center text-gray-500 p-4">No records found.</p>'; return; }
 
-                currentReportData = []; // Reset for export
+                currentReportData = []; 
                 let rows = [];
-                querySnapshot.forEach(doc => {
-                    const d = doc.data();
-                    if (!statusFilter || statusFilter.includes(d.status)) {
-                        rows.push({id: doc.id, ...d});
-                    }
-                });
                 
-                if(reportType === "Lesson Plans" || reportType === "Incidents") { rows = []; querySnapshot.forEach(doc => rows.push({id: doc.id, ...doc.data()})); }
+                // --- OPERATIONS FLATTENING LOGIC ---
+                if (reportType === "Operations") {
+                    querySnapshot.forEach(doc => {
+                        const d = doc.data();
+                        
+                        if(d.type === "Maintenance" && (d.status === "Done" || d.status === "Closed")) {
+                             rows.push({
+                                ...d,
+                                displayType: "Maintenance",
+                                displayItem: d.location + ": " + d.issue,
+                                displayAction: "Closed/Done",
+                                displayTime: d.updatedAt ? window.formatTimestamp(d.updatedAt) : window.formatTimestamp(d.timestamp),
+                                displayUser: (d.closedBy || d.submittedBy || "").split('@')[0],
+                                rawTime: d.updatedAt ? d.updatedAt.toDate() : d.timestamp.toDate()
+                             });
+                        }
 
-                rows.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+                        if (d.type === "Checkout") {
+                            if(d.items && Array.isArray(d.items)) {
+                                d.items.forEach(item => {
+                                    rows.push({
+                                        ...d,
+                                        displayType: "Checkout (Release)",
+                                        displayItem: `${item.qty}x ${item.name}`,
+                                        displayStatus: "Released",
+                                        displayAction: "Released",
+                                        displayTime: window.formatTimestamp(d.timestamp),
+                                        displayUser: (d.submittedBy || "").split('@')[0],
+                                        rawTime: d.timestamp.toDate()
+                                    });
+                                });
+                            }
+
+                            if(d.returnLogs && Array.isArray(d.returnLogs)) {
+                                d.returnLogs.forEach(log => {
+                                    log.items.forEach(rItem => {
+                                        rows.push({
+                                            ...d, 
+                                            displayType: "Checkout (Return)",
+                                            displayItem: `${rItem.qty}x ${rItem.name}`,
+                                            displayStatus: "Returned",
+                                            displayAction: "Returned",
+                                            displayTime: window.formatTimestamp(new Date(log.timestamp)),
+                                            displayUser: (log.receivedBy || "").split('@')[0],
+                                            rawTime: new Date(log.timestamp)
+                                        });
+                                    });
+                                });
+                            }
+                        }
+                    });
+                    rows.sort((a,b) => b.rawTime - a.rawTime);
+                    
+                } else {
+                    querySnapshot.forEach(doc => {
+                        const d = doc.data();
+                        if (!statusFilter || statusFilter.includes(d.status)) {
+                            rows.push({id: doc.id, ...d});
+                        }
+                    });
+                    rows.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+                }
 
                 let tableHtml = `<div class="overflow-x-auto no-scrollbar"><table class="min-w-full bg-white border"><thead class="bg-gray-100"><tr>${columns.map(c => `<th class="py-2 px-4 border text-left text-xs font-bold text-gray-600 uppercase whitespace-nowrap">${c}</th>`).join('')}</tr></thead><tbody>`;
 
                 rows.forEach(r => {
-                    // Prepare data for export
-                    const t1 = window.formatTimestamp(r.timestamp);
-                    const t2 = r.updatedAt ? window.formatTimestamp(r.updatedAt) : '-';
-                    const safeUser = (r.submittedBy || r.teacherEmail || "Unknown").split('@')[0];
-                    // Logic for Closed/Received By
-                    let safeCloser = (r.closedBy || "-").split('@')[0];
-                    if (r.receivers && r.receivers.length > 0) {
-                        // Unique receivers
-                        safeCloser = [...new Set(r.receivers)].map(e => e.split('@')[0]).join(', ');
-                    }
-                    
+                    let rowData = "";
+                    let rowClass = "border-b hover:bg-gray-50 text-sm";
                     const ticket = r.ticketCode || "N/A";
 
-                    const exportRow = { ...r };
-                    exportRow.formattedStartTime = t1;
-                    exportRow.formattedEndTime = t2;
-                    exportRow.loggedByName = safeUser;
-                    exportRow.closedByName = safeCloser;
-                    // Format items for export if array
-                    if(r.items) exportRow.itemsList = r.items.map(i => `${i.qty}x ${i.name}`).join('; ');
-                    
-                    currentReportData.push(exportRow);
+                    if (reportType === "Operations") {
+                         rowData = `<td class="text-xs font-mono">${ticket}</td>
+                                    <td>${r.displayType}</td>
+                                    <td>${r.displayItem}</td>
+                                    <td><span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">${r.status}</span></td>
+                                    <td>${r.displayAction}</td>
+                                    <td class="whitespace-nowrap text-xs">${r.displayTime}</td>
+                                    <td>${r.displayUser}</td>`;
+                         // EXPORT CONSTRUCTION
+                         currentReportData.push({
+                             Ticket: ticket,
+                             Type: r.displayType,
+                             Item: r.displayItem,
+                             Status: r.status,
+                             Action: r.displayAction,
+                             Time: r.displayTime,
+                             LoggedBy: r.displayUser
+                         });
 
-                    let rowData = "";
-                    let rowClass = "border-b ";
+                    } else {
+                        // Standard Columns
+                        const t1 = window.formatTimestamp(r.timestamp);
+                        const t2 = r.updatedAt ? window.formatTimestamp(r.updatedAt) : '-';
+                        const safeUser = (r.submittedBy || r.teacherEmail || "Unknown").split('@')[0];
 
-                    if (reportType === "Lesson Plans") {
-                        const statusColor = r.status === 'Approved' ? 'text-green-600' : (r.status === 'Revision Needed' ? 'text-orange-600' : 'text-gray-500');
-                        rowData = `<td class="text-xs font-mono">${ticket}</td><td class="font-bold ${statusColor}">${r.status || 'Pending'}</td><td>${r.subject}</td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${r.reviewedAt ? window.formatTimestamp(r.reviewedAt) : '-'}</td><td>${safeUser}</td>`;
-                    } else if (reportType === "Operations") {
-                        let itemDesc = r.location || r.item;
-                        if(r.items && r.items.length) {
-                             itemDesc = r.items.map(i => `${i.qty}x ${i.name}`).join(', ');
+                        // Accountability Data
+                        const admittedBy = (r.submittedBy || 'Unknown').split('@')[0];
+                        const dischargedBy = r.dischargedBy ? r.dischargedBy.split('@')[0] : '-';
+                        const inBy = (r.submittedBy || 'Unknown').split('@')[0];
+                        const outBy = r.loggedOutBy ? r.loggedOutBy.split('@')[0] : '-';
+
+                        if (reportType === "Lesson Plans") {
+                            const statusColor = r.status === 'Approved' ? 'text-green-600' : (r.status === 'Revision Needed' ? 'text-orange-600' : 'text-gray-500');
+                            rowData = `<td class="text-xs font-mono">${ticket}</td><td class="font-bold ${statusColor}">${r.status || 'Pending'}</td><td>${r.subject}</td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${r.reviewedAt ? window.formatTimestamp(r.reviewedAt) : '-'}</td><td>${safeUser}</td>`;
+                            currentReportData.push({Ticket: ticket, Status: r.status, Subject: r.subject, Submitted: t1, Reviewed: r.reviewedAt, Teacher: safeUser});
+                        
+                        } else if (reportType === "Visitors") {
+                            rowData = `<td class="text-xs font-mono">${ticket}</td><td>${r.name}</td><td>${r.purpose}</td><td><span class="text-red-500 font-bold">Out</span></td><td class="whitespace-nowrap">${t1}</td><td class="text-xs text-blue-600">${inBy}</td><td class="whitespace-nowrap">${t2}</td><td class="text-xs text-blue-600">${outBy}</td>`;
+                            currentReportData.push({Ticket: ticket, Visitor: r.name, Purpose: r.purpose, Status: r.status, InTime: t1, InBy: inBy, OutTime: t2, OutBy: outBy});
+                        
+                        } else if (reportType === "Incidents") {
+                            rowData = `<td class="text-xs font-mono">${ticket}</td><td>${r.type}</td><td>${r.details}</td><td class="whitespace-nowrap">${t1}</td><td>${safeUser}</td>`;
+                            currentReportData.push({Ticket: ticket, Type: r.type, Details: r.details, Date: t1, LoggedBy: safeUser});
+                        
+                        } else if (reportType === "Health") {
+                            rowData = `<td class="text-xs font-mono">${ticket}</td><td>${r.student}</td><td class="text-xs">${r.symptoms || '-'}</td><td class="text-xs">${r.action || '-'}</td><td class="whitespace-nowrap">${t1}</td><td class="text-xs text-blue-600">${admittedBy}</td><td class="whitespace-nowrap">${t2}</td><td class="text-xs text-blue-600">${dischargedBy}</td>`;
+                            currentReportData.push({Ticket: ticket, Patient: r.student, Symptoms: r.symptoms, Action: r.action, Admitted: t1, AdmittedBy: admittedBy, Discharged: t2, DischargedBy: dischargedBy});
                         }
-                        rowData = `<td class="text-xs font-mono">${ticket}</td><td>${r.type}</td><td class="max-w-xs truncate" title="${itemDesc}">${itemDesc}</td><td><span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">${r.status}</span></td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser}</td><td class="text-xs">${safeCloser}</td>`;
-                    } else if (reportType === "Visitors") {
-                        rowData = `<td class="text-xs font-mono">${ticket}</td><td>${r.name}</td><td>${r.purpose}</td><td><span class="text-red-500 font-bold">Out</span></td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser}</td>`;
-                    } else if (reportType === "Incidents") {
-                         rowData = `<td class="text-xs font-mono">${ticket}</td><td>${r.type}</td><td>${r.details}</td><td class="whitespace-nowrap">${t1}</td><td>${safeUser}</td>`;
-                    } else if (reportType === "Health") {
-                        rowData = `<td class="text-xs font-mono">${ticket}</td><td>${r.student}</td><td>${r.symptoms || r.notes}</td><td>${r.action || '-'}</td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser}</td>`;
                     }
-                    tableHtml += `<tr class="${rowClass} hover:bg-gray-50 text-sm">${rowData}</tr>`;
+                    tableHtml += `<tr class="${rowClass}">${rowData}</tr>`;
                 });
                 tableHtml += `</tbody></table></div>`;
                 content.innerHTML = tableHtml;
@@ -780,7 +834,6 @@
         onAuthStateChanged(auth, async (user) => {
             const loader = document.getElementById('app-loader');
             if (user) {
-                // User is signed in, check role
                 const docSnap = await getDoc(doc(db, "users", user.email));
                 if (docSnap.exists()) {
                     const d = docSnap.data();
@@ -790,7 +843,6 @@
                     if(loader) loader.classList.add('hidden');
                 }
             } else {
-                // User is signed out
                 document.getElementById('dashboard-view').classList.add('hidden');
                 document.getElementById('login-view').classList.remove('hidden');
                 if(loader) loader.classList.add('hidden');
@@ -808,7 +860,6 @@
             try {
                 errorMsg.innerHTML = ""; loginBtn.innerText = "Verifying..."; loginBtn.disabled = true;
                 await signInWithEmailAndPassword(auth, email, password);
-                // Listener will handle UI update
             } catch (error) {
                 console.error("Login Error:", error);
                 errorMsg.innerText = "Login Failed: " + error.message;
@@ -875,8 +926,7 @@
                 adminViews.forEach(el => el.classList.add('hidden'));
             }
 
-            // REAL-TIME LISTENERS
-            subscribeNotifications(); // Activity feed
+            subscribeNotifications();
             if (currentUserRole === 'teacher') subscribeLessonHistory();
             if (currentUserRole === 'security') subscribeVisitorMonitor();
             if (currentUserRole === 'staff') {
@@ -885,11 +935,10 @@
             }
             if (currentUserRole === 'nurse') {
                 subscribeActiveClinic();
-                loadStudentOptions('clinic-student-list');
+                loadPatientOptions('clinic-student-list');
             }
             
             document.getElementById('nav-profile').classList.remove('hidden');
-            // Highlight initial tab properly
             switchModule('welcome-module', null); 
         }
 
@@ -898,7 +947,6 @@
             modules.forEach(mod => mod.classList.add('hidden'));
             document.getElementById(moduleId).classList.remove('hidden');
 
-            // Close sidebar on mobile when clicked
             const sidebar = document.getElementById('main-sidebar');
             const overlay = document.getElementById('sidebar-overlay');
             if(!sidebar.classList.contains('-translate-x-full')) {
@@ -906,7 +954,6 @@
                 overlay.classList.add('hidden');
             }
 
-            // Sidebar Active State
             const navBtns = document.querySelectorAll('nav button');
             navBtns.forEach(btn => {
                 btn.classList.remove('bg-slate-700', 'border-l-4', 'border-blue-500');
@@ -935,25 +982,37 @@
                 snap.forEach(doc => {
                     const d = doc.data();
                     const opt = document.createElement('option');
-                    // Ensure the value contains the name
                     opt.value = d.displayName || d.email;
                     datalist.appendChild(opt);
                 });
             } catch(e){ console.error("Error loading borrowers", e); }
         }
 
-        async function loadStudentOptions(datalistId) {
+        async function loadPatientOptions(datalistId) {
             const datalist = document.getElementById(datalistId);
             if(!datalist) return;
+            datalist.innerHTML = '';
+            
             try {
-                const q = query(collection(db, "students"), limit(100)); // Limit for performance
-                const snap = await getDocs(q);
-                datalist.innerHTML = '';
-                snap.forEach(doc => {
+                const qStudents = query(collection(db, "students"), limit(100));
+                const snapStudents = await getDocs(qStudents);
+                snapStudents.forEach(doc => {
                     const d = doc.data();
                     const opt = document.createElement('option');
                     opt.value = d.fullName;
-                    opt.label = `${d.studentId} - ${d.grade} ${d.section}`;
+                    opt.label = `${d.studentId} - Student`;
+                    datalist.appendChild(opt);
+                });
+            } catch(e) {}
+
+            try {
+                const qStaff = query(collection(db, "users"), orderBy("displayName"));
+                const snapStaff = await getDocs(qStaff);
+                snapStaff.forEach(doc => {
+                    const d = doc.data();
+                    const opt = document.createElement('option');
+                    opt.value = d.displayName;
+                    opt.label = `${d.role} - Employee`;
                     datalist.appendChild(opt);
                 });
             } catch(e) {}
@@ -965,7 +1024,6 @@
             
             let q;
             if(mode === 'all') {
-                // Admin: Only Approved plans
                 q = query(collection(db, "lesson_plans"), where("status", "==", "Approved"), limit(100));
             } else {
                 q = query(collection(db, "lesson_plans"), where("teacherEmail", "==", auth.currentUser.email), limit(100));
@@ -986,7 +1044,6 @@
                 const margin = 20;
                 const contentWidth = 170;
 
-                // Helper to check Y and add page
                 const checkY = (height) => {
                     if (y + height >= pageHeight - margin) {
                         doc.addPage();
@@ -994,14 +1051,12 @@
                     }
                 };
 
-                // Title
                 doc.setFontSize(18);
                 doc.setFont("helvetica", "bold");
                 const titleLines = doc.splitTextToSize(d.subject || "Untitled", contentWidth);
                 doc.text(titleLines, margin, y);
                 y += (titleLines.length * 10) + 10;
 
-                // Meta
                 doc.setFontSize(10);
                 doc.setFont("helvetica", "normal");
                 doc.text(`Ticket: ${d.ticketCode || "N/A"}`, margin, y); y += 6;
@@ -1009,7 +1064,6 @@
                 doc.text(`Schedule: ${d.implementationDate ? new Date(d.implementationDate).toLocaleString() : 'Not Scheduled'}`, margin, y); y += 6;
                 doc.text(`Status: ${d.status}`, margin, y); y += 15;
 
-                // Sections
                 const sections = [
                     { title: "Objective", content: d.objective },
                     { title: "Materials", content: d.materials },
@@ -1055,7 +1109,6 @@
                 let allDocs = [];
                 snapshot.forEach(doc => allDocs.push({id: doc.id, ...doc.data()}));
                 
-                // Sort by Implementation Schedule (Descending - Newest/Upcoming first)
                 allDocs.sort((a,b) => {
                     const dateA = a.implementationDate ? new Date(a.implementationDate) : new Date(0);
                     const dateB = b.implementationDate ? new Date(b.implementationDate) : new Date(0);
@@ -1106,7 +1159,6 @@
             const container = document.getElementById('ops-active-list');
             if(!container) return;
             
-            // Note: Simple query for listener, filter in memory for complex OR logic
             const q = query(collection(db, "operations_requests"), limit(50)); 
             
             const unsub = onSnapshot(q, (snapshot) => {
@@ -1117,7 +1169,6 @@
                     if(d.status !== 'Closed' && d.status !== 'Done' && d.status !== 'Returned') {
                         hasItems = true;
                         
-                        // Determine button based on type
                         let actionBtn = "";
                         if(d.type === 'Checkout') {
                             actionBtn = `<button onclick="openReturnModal('${doc.id}', ${JSON.stringify(d).replace(/"/g, '&quot;')})" class="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded">Return</button>`;
@@ -1128,12 +1179,11 @@
                         const item = document.createElement('div');
                         item.className = "bg-white p-4 rounded shadow-sm border border-gray-200 mb-2 flex justify-between items-center";
                         
-                        // Title Logic
                         let title = "";
                         if(d.type === 'Checkout' && d.items && d.items.length) {
-                            title = `${d.items.length} item(s) (Borrower: ${d.borrower || 'N/A'})`;
+                            title = `${d.items.length} item(s) (${d.borrower || 'N/A'}) • Checked Out`;
                         } else {
-                            title = d.location || d.item;
+                            title = `${d.location || d.item} (${(d.submittedBy || 'Unknown').split('@')[0]}) • Checked Out`;
                         }
 
                         item.innerHTML = `<div><div class="text-xs font-mono text-gray-400 mb-1">${d.ticketCode || 'No Ticket'}</div><div class="font-bold text-sm">${title}</div><div class="text-xs text-gray-500">${d.type} • ${d.status}</div></div>${actionBtn}`;
@@ -1182,10 +1232,11 @@
                 if (snap.empty) {
                      container.innerHTML = '<div class="text-gray-400 text-xs italic p-2">No active visitors</div>';
                 } else {
-                    let html = '<div class="overflow-x-auto"><table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500 uppercase"><tr><th class="p-2">Ticket</th><th class="p-2">Visitor</th><th class="p-2">Purpose</th><th class="p-2">Time In</th></tr></thead><tbody>';
+                    let html = '<div class="overflow-x-auto"><table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500 uppercase"><tr><th class="p-2">Ticket</th><th class="p-2">Visitor</th><th class="p-2">Purpose</th><th class="p-2">Time In</th><th class="p-2">In By</th></tr></thead><tbody>';
                     snap.forEach(doc => {
                         const d = doc.data();
-                        html += `<tr class="border-b"><td class="p-2 font-mono text-xs">${d.ticketCode || '-'}</td><td class="p-2 font-bold">${d.name}</td><td class="p-2 text-xs">${d.purpose}</td><td class="p-2 text-xs">${window.formatTimestamp(d.timestamp)}</td></tr>`;
+                        const inBy = (d.submittedBy || 'Unknown').split('@')[0];
+                        html += `<tr class="border-b"><td class="p-2 font-mono text-xs">${d.ticketCode || '-'}</td><td class="p-2 font-bold">${d.name}</td><td class="p-2 text-xs">${d.purpose}</td><td class="p-2 text-xs">${window.formatTimestamp(d.timestamp)}</td><td class="p-2 text-xs text-blue-600">${inBy}</td></tr>`;
                     });
                     html += '</tbody></table></div>';
                     container.innerHTML = html;
@@ -1209,11 +1260,15 @@
                 if (activeRows.length === 0) {
                      container.innerHTML = '<div class="text-gray-400 text-xs italic p-2">No active tasks</div>';
                 } else {
-                     let html = '<div class="overflow-x-auto"><table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500 uppercase"><tr><th class="p-2">Ticket</th><th class="p-2">Type</th><th class="p-2">Details</th><th class="p-2">Status</th></tr></thead><tbody>';
+                     let html = '<div class="overflow-x-auto"><table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500 uppercase"><tr><th class="p-2">Ticket</th><th class="p-2">Type</th><th class="p-2">Details</th><th class="p-2">Status</th><th class="p-2">Logged By</th></tr></thead><tbody>';
                      activeRows.forEach(d => {
                         let title = d.location || d.item;
-                        if(d.type === 'Checkout' && d.items) title = `${d.items.length} items`;
-                        html += `<tr class="border-b"><td class="p-2 font-mono text-xs">${d.ticketCode || '-'}</td><td class="p-2 text-xs">${d.type}</td><td class="p-2 font-bold truncate max-w-[150px]">${title}</td><td class="p-2 text-xs">${d.status}</td></tr>`;
+                        if(d.type === 'Checkout' && d.items) {
+                            title = d.items.map(i => `${i.qty}x ${i.name}`).join(', ');
+                            title += ` (${d.borrower})`;
+                        }
+                        const loggedBy = (d.submittedBy || 'Unknown').split('@')[0];
+                        html += `<tr class="border-b"><td class="p-2 font-mono text-xs">${d.ticketCode || '-'}</td><td class="p-2 text-xs">${d.type}</td><td class="p-2 font-bold truncate max-w-[200px]" title="${title}">${title}</td><td class="p-2 text-xs">${d.status}</td><td class="p-2 text-xs text-blue-600">${loggedBy}</td></tr>`;
                      });
                      html += '</tbody></table></div>';
                      container.innerHTML = html;
@@ -1234,9 +1289,11 @@
                 if (activeRows.length === 0) {
                      container.innerHTML = '<div class="text-gray-400 text-xs italic p-2">Clinic empty</div>';
                 } else {
-                     let html = '<div class="overflow-x-auto"><table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500 uppercase"><tr><th class="p-2">Ticket</th><th class="p-2">Student</th><th class="p-2">Admitted</th></tr></thead><tbody>';
+                     let html = '<div class="overflow-x-auto"><table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500 uppercase"><tr><th class="p-2">Ticket</th><th class="p-2">Student</th><th class="p-2">Details</th><th class="p-2">Admitted By</th></tr></thead><tbody>';
                      activeRows.forEach(d => {
-                        html += `<tr class="border-b"><td class="p-2 font-mono text-xs">${d.ticketCode || '-'}</td><td class="p-2 font-bold">${d.student}</td><td class="p-2 text-xs">${window.formatTimestamp(d.timestamp)}</td></tr>`;
+                        const details = `Sympt: ${d.symptoms} | Act: ${d.action}`;
+                        const admittedBy = (d.submittedBy || 'Unknown').split('@')[0];
+                        html += `<tr class="border-b"><td class="p-2 font-mono text-xs">${d.ticketCode || '-'}</td><td class="p-2 font-bold">${d.student}</td><td class="p-2 text-xs truncate max-w-[150px]" title="${details}">${details}</td><td class="p-2 text-xs text-blue-600">${admittedBy}</td></tr>`;
                      });
                      html += '</tbody></table></div>';
                      container.innerHTML = html;
@@ -1259,7 +1316,6 @@
 
                 snap.forEach(doc => {
                     const d = doc.data();
-                    // Only count non-drafts within the week
                     if (d.timestamp && d.timestamp.toDate() >= startOfWeek && d.status !== 'Draft') weekCount++;
                     
                     const item = document.createElement('div');
@@ -1284,7 +1340,6 @@
             const container = document.getElementById('admin-health-history-list');
             if(!container) return;
             
-            // FIX: Removed orderBy to prevent compound query index error
             const q = query(collection(db, "health_logs"), where("status", "==", "Discharged"), limit(20));
             
             const unsub = onSnapshot(q, (snapshot) => {
@@ -1293,14 +1348,14 @@
                     return;
                 }
                 
-                // Manual Sort in Memory
                 let docs = [];
                 snapshot.forEach(doc => docs.push(doc.data()));
                 docs.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
 
-                let html = '<div class="overflow-x-auto no-scrollbar"><table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500 uppercase"><tr><th class="p-3">Ticket</th><th class="p-3">Student</th><th class="p-3">Logged By</th><th class="p-3">Symptoms</th><th class="p-3">Action</th><th class="p-3">Admitted</th><th class="p-3">Discharged</th></tr></thead><tbody>';
+                let html = '<div class="overflow-x-auto no-scrollbar"><table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500 uppercase"><tr><th class="p-3">Ticket</th><th class="p-3">Student</th><th class="p-3">Logged By</th><th class="p-3">Symptoms</th><th class="p-3">Action</th><th class="p-3">Admitted</th><th class="p-3">Discharged (By)</th></tr></thead><tbody>';
                 docs.forEach(d => {
                     const safeUser = (d.submittedBy || "Unknown").split('@')[0];
+                    const dischargedBy = (d.dischargedBy || "-").split('@')[0];
                     html += `<tr class="border-b">
                         <td class="p-3 font-mono text-xs">${d.ticketCode || '-'}</td>
                         <td class="p-3 font-bold">${d.student}</td>
@@ -1308,7 +1363,7 @@
                         <td class="p-3 truncate max-w-[100px]" title="${d.symptoms}">${d.symptoms || '-'}</td>
                         <td class="p-3 truncate max-w-[100px]" title="${d.action}">${d.action || '-'}</td>
                         <td class="p-3 text-xs text-gray-500">${window.formatTimestamp(d.timestamp)}</td>
-                        <td class="p-3 text-xs text-gray-500">${d.updatedAt ? window.formatTimestamp(d.updatedAt) : '-'}</td>
+                        <td class="p-3 text-xs text-gray-500">${d.updatedAt ? window.formatTimestamp(d.updatedAt) : '-'} (${dischargedBy})</td>
                     </tr>`;
                 });
                 html += '</tbody></table></div>';
@@ -1326,7 +1381,8 @@
                data.push({
                    Ticket: d.ticketCode,
                    Student: d.student,
-                   LoggedBy: d.submittedBy,
+                   AdmittedBy: d.submittedBy,
+                   DischargedBy: d.dischargedBy || '-',
                    Symptoms: d.symptoms,
                    Action: d.action,
                    Admitted: window.formatTimestamp(d.timestamp),
@@ -2043,7 +2099,10 @@
                             </div>
                         </div>
                         <div class="bg-white p-6 rounded shadow h-fit border border-gray-100">
-                            <h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Active Tasks</h3>
+                            <h3 class="font-bold text-gray-700 border-b pb-2 mb-4 flex justify-between items-center">
+                                Active Tasks
+                                <button onclick="openHistoryModal('Operations')" class="text-xs text-blue-500 font-bold border border-blue-200 px-2 py-1 rounded hover:bg-blue-50">View History</button>
+                            </h3>
                             <div id="ops-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div>
                         </div>
                     </div>
@@ -2062,7 +2121,18 @@
                     </div>
                     <div id="teacher-safety-view" class="hidden mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded text-center text-yellow-800 text-sm">Visitor logging is restricted to Security personnel. You may only view active reports.</div>
                     <div id="visitor-entry-form" class="employee-view">
-                        <div id="security-monitor-view" class="mb-6"><div class="bg-white p-6 rounded shadow border border-gray-100"><h3 class="font-bold text-lg text-green-700 mb-4 flex items-center gap-2">🟢 Live Visitor Monitor <span class="text-xs font-normal text-gray-500 ml-2">(On Campus)</span></h3><div id="visitor-monitor-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div></div></div>
+                        <div id="security-monitor-view" class="mb-6">
+                             <div class="bg-white p-6 rounded shadow border border-gray-100">
+                                 <div class="flex justify-between items-center mb-4">
+                                     <h3 class="font-bold text-lg text-green-700 flex items-center gap-2">🟢 Live Visitor Monitor <span class="text-xs font-normal text-gray-500 ml-2">(On Campus)</span></h3>
+                                     <div class="flex gap-2">
+                                         <button onclick="openHistoryModal('Visitors')" class="text-xs text-blue-500 font-bold border border-blue-200 px-2 py-1 rounded hover:bg-blue-50">Visitor Logs</button>
+                                         <button onclick="openHistoryModal('Incidents')" class="text-xs text-red-500 font-bold border border-red-200 px-2 py-1 rounded hover:bg-red-50">Incident Logs</button>
+                                     </div>
+                                 </div>
+                                 <div id="visitor-monitor-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                             </div>
+                        </div>
                         
                         <div id="visitor-entry-section" class="bg-white p-6 rounded shadow mb-6 relative">
                             <h3 class="font-bold text-lg mb-2">New Visitor Entry</h3>
@@ -2101,7 +2171,10 @@
                             <button onclick="submitClinic()" class="bg-red-500 text-white px-6 py-3 rounded hover:bg-red-600 font-bold w-full">Log Visit</button>
                         </div>
                         <div class="bg-white p-6 rounded shadow h-fit border border-gray-100">
-                            <h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Currently Admitted</h3>
+                            <h3 class="font-bold text-gray-700 border-b pb-2 mb-4 flex justify-between items-center">
+                                Currently Admitted
+                                <button onclick="openHistoryModal('Health')" class="text-xs text-blue-500 font-bold border border-blue-200 px-2 py-1 rounded hover:bg-blue-50">View History</button>
+                            </h3>
                             <div id="clinic-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div>
                         </div>
                     </div>
