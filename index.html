@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>CampusFlow Command Center</title>
     <!-- 1. Tailwind CSS (Styling) -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -15,6 +15,10 @@
         .no-scrollbar {
             -ms-overflow-style: none;  /* IE and Edge */
             scrollbar-width: none;  /* Firefox */
+        }
+        /* Mobile Touch Optimizations */
+        button, input, select, textarea {
+            touch-action: manipulation;
         }
     </style>
     
@@ -81,6 +85,21 @@
             activeListeners = [];
         }
 
+        // --- MOBILE NAV TOGGLE ---
+        window.toggleSidebar = () => {
+            const sidebar = document.getElementById('main-sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            if (sidebar.classList.contains('-translate-x-full')) {
+                // Open
+                sidebar.classList.remove('-translate-x-full');
+                overlay.classList.remove('hidden');
+            } else {
+                // Close
+                sidebar.classList.add('-translate-x-full');
+                overlay.classList.add('hidden');
+            }
+        };
+
         // --- NOTIFICATIONS ---
         
         // Click outside to close
@@ -96,7 +115,6 @@
             const panel = document.getElementById('notification-panel');
             if (panel.classList.contains('hidden')) {
                 panel.classList.remove('hidden');
-                // Scroll to bottom logic if needed, but list is ordered new->old
             } else {
                 panel.classList.add('hidden');
             }
@@ -134,7 +152,7 @@
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
             const bgClass = type === 'error' ? 'bg-red-600' : (type === 'success' ? 'bg-green-600' : 'bg-blue-600');
-            toast.className = `${bgClass} text-white px-6 py-3 rounded shadow-lg transform transition-all duration-300 translate-y-10 opacity-0 flex items-center gap-2`;
+            toast.className = `${bgClass} text-white px-6 py-3 rounded shadow-lg transform transition-all duration-300 translate-y-10 opacity-0 flex items-center gap-2 text-sm md:text-base`;
             toast.innerHTML = `<span>${type === 'error' ? '⚠️' : (type === 'success' ? '✅' : 'ℹ️')}</span><span>${message}</span>`;
             container.appendChild(toast);
             requestAnimationFrame(() => toast.classList.remove('translate-y-10', 'opacity-0'));
@@ -178,7 +196,6 @@
                     });
                     showToast(`${actionName} successful`, "success");
                     logSystemAction(`Updated status: ${actionName} (${newStatus})`); 
-                    // No manual refresh needed, onSnapshot handles it
                 } catch(e) { showToast("Error: " + e.message, "error"); }
             });
         };
@@ -299,7 +316,7 @@
             const content = document.getElementById('report-content');
             
             modal.classList.remove('hidden'); modal.classList.add('flex');
-            title.innerText = `${reportType} History (Completed/Closed)`;
+            title.innerText = `${reportType} History`;
             content.innerHTML = '<p class="text-center text-gray-500 animate-pulse p-4">Fetching history...</p>';
 
             let collectionName = "", columns = [], statusFilter = [];
@@ -327,7 +344,6 @@
             }
 
             try {
-                // Keep getDocs for History modal as it doesn't need to be real-time open connection
                 const q = query(collection(db, collectionName), limit(50));
                 const querySnapshot = await getDocs(q);
                 if (querySnapshot.empty) { content.innerHTML = '<p class="text-center text-gray-500 p-4">No records found.</p>'; return; }
@@ -344,7 +360,7 @@
 
                 rows.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
 
-                let tableHtml = `<div class="overflow-x-auto"><table class="min-w-full bg-white border"><thead class="bg-gray-100"><tr>${columns.map(c => `<th class="py-2 px-4 border text-left text-xs font-bold text-gray-600 uppercase">${c}</th>`).join('')}</tr></thead><tbody>`;
+                let tableHtml = `<div class="overflow-x-auto no-scrollbar"><table class="min-w-full bg-white border"><thead class="bg-gray-100"><tr>${columns.map(c => `<th class="py-2 px-4 border text-left text-xs font-bold text-gray-600 uppercase whitespace-nowrap">${c}</th>`).join('')}</tr></thead><tbody>`;
 
                 rows.forEach(r => {
                     const t1 = window.formatTimestamp(r.timestamp); // Start
@@ -355,17 +371,17 @@
 
                     if (reportType === "Lesson Plans") {
                         const statusColor = r.status === 'Approved' ? 'text-green-600' : (r.status === 'Revision Needed' ? 'text-orange-600' : 'text-gray-500');
-                        rowData = `<td class="font-bold ${statusColor}">${r.status || 'Pending'}</td><td>${r.subject}</td><td>${t1}</td><td>${r.reviewedAt ? window.formatTimestamp(r.reviewedAt) : '-'}</td><td>${safeUser(r.teacherEmail)}</td>`;
+                        rowData = `<td class="font-bold ${statusColor}">${r.status || 'Pending'}</td><td>${r.subject}</td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${r.reviewedAt ? window.formatTimestamp(r.reviewedAt) : '-'}</td><td>${safeUser(r.teacherEmail)}</td>`;
                     } else if (reportType === "Operations") {
-                        rowData = `<td>${r.type}</td><td>${r.location || r.item}</td><td><span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">${r.status}</span></td><td>${t1}</td><td>${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
+                        rowData = `<td>${r.type}</td><td>${r.location || r.item}</td><td><span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">${r.status}</span></td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
                     } else if (reportType === "Visitors") {
-                        rowData = `<td>${r.name}</td><td>${r.purpose}</td><td><span class="text-red-500 font-bold">Out</span></td><td>${t1}</td><td>${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
+                        rowData = `<td>${r.name}</td><td>${r.purpose}</td><td><span class="text-red-500 font-bold">Out</span></td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
                     } else if (reportType === "Incidents") {
-                         rowData = `<td>${r.type}</td><td>${r.details}</td><td>${t1}</td><td>${safeUser(r.submittedBy)}</td>`;
+                         rowData = `<td>${r.type}</td><td>${r.details}</td><td class="whitespace-nowrap">${t1}</td><td>${safeUser(r.submittedBy)}</td>`;
                     } else if (reportType === "Health") {
-                        rowData = `<td>${r.student}</td><td>${r.symptoms || r.notes}</td><td>${r.action || '-'}</td><td>${t1}</td><td>${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
+                        rowData = `<td>${r.student}</td><td>${r.symptoms || r.notes}</td><td>${r.action || '-'}</td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
                     }
-                    tableHtml += `<tr class="${rowClass}">${rowData}</tr>`;
+                    tableHtml += `<tr class="${rowClass} hover:bg-gray-50 text-sm">${rowData}</tr>`;
                 });
                 tableHtml += `</tbody></table></div>`;
                 content.innerHTML = tableHtml;
@@ -520,6 +536,14 @@
             modules.forEach(mod => mod.classList.add('hidden'));
             document.getElementById(moduleId).classList.remove('hidden');
 
+            // Close sidebar on mobile when clicked
+            const sidebar = document.getElementById('main-sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            if(!sidebar.classList.contains('-translate-x-full')) {
+                sidebar.classList.add('-translate-x-full');
+                overlay.classList.add('hidden');
+            }
+
             // Sidebar Active State
             const navBtns = document.querySelectorAll('nav button');
             navBtns.forEach(btn => {
@@ -549,7 +573,12 @@
                 snap.forEach(doc => {
                     const d = doc.data();
                     const opt = document.createElement('option');
+                    // Ensure the value contains the name
                     opt.value = d.displayName || d.email;
+                    // Label contains position, but standard HTML datalist behavior is tricky.
+                    // The user requested simpler view. We just use name in value. 
+                    // To show position, we might need a custom dropdown, but for native mobile select/datalist:
+                    opt.label = `${d.displayName} (${d.position || d.role || 'Staff'})`; 
                     datalist.appendChild(opt);
                 });
             } catch(e){ console.error("Error loading borrowers", e); }
@@ -578,7 +607,6 @@
             if(!container) return; 
             
             const userEmail = auth.currentUser.email;
-            // FIX: Removed orderBy to prevent compound query index error, fetch more to handle filtering
             const q = query(collection(db, "lesson_plans"), where("teacherEmail", "==", userEmail), limit(100));
             
             const unsub = onSnapshot(q, (snapshot) => {
@@ -816,7 +844,6 @@
             const container = document.getElementById('admin-health-history-list');
             if(!container) return;
             
-            // FIX: Removed orderBy to prevent compound query index error
             const q = query(collection(db, "health_logs"), where("status", "==", "Discharged"), limit(20));
             
             const unsub = onSnapshot(q, (snapshot) => {
@@ -825,7 +852,6 @@
                     return;
                 }
                 
-                // Manual Sort in Memory
                 let docs = [];
                 snapshot.forEach(doc => docs.push(doc.data()));
                 docs.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
@@ -1142,10 +1168,10 @@
 
     <!-- CREDENTIALS MODAL -->
     <div id="credentials-modal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-[80]">
-        <div class="bg-white p-8 rounded-lg shadow-2xl w-96 border-4 border-red-500">
+        <div class="bg-white p-8 rounded-lg shadow-2xl w-96 border-4 border-red-500 m-2">
             <h3 class="font-bold text-2xl mb-4 text-red-600">⚠️ SAVE THIS NOW</h3>
             <p class="text-sm text-gray-700 mb-4 font-bold">The credentials below are shown ONLY ONCE. If you lose them, the account cannot be accessed.</p>
-            <div class="bg-gray-100 p-4 rounded mb-6 font-mono text-sm border border-gray-300">
+            <div class="bg-gray-100 p-4 rounded mb-6 font-mono text-sm border border-gray-300 overflow-x-auto">
                 <p><strong>Email:</strong> <span id="cred-email" class="select-all"></span></p>
                 <p class="mt-2"><strong>Password:</strong> <span id="cred-password" class="bg-yellow-200 px-1 select-all"></span></p>
             </div>
@@ -1156,9 +1182,9 @@
 
     <!-- LESSON PLAN MODAL -->
     <div id="lesson-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-[70] p-4">
-        <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-3xl h-[85vh] flex flex-col">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-[95%] md:w-full md:max-w-3xl h-[90vh] md:h-[85vh] flex flex-col">
             <div class="flex justify-between items-center mb-4 border-b pb-2">
-                <h3 class="font-bold text-xl text-gray-800">Lesson Plan Details</h3>
+                <h3 class="font-bold text-lg md:text-xl text-gray-800">Lesson Plan Details</h3>
                 <div class="flex items-center gap-2"><span id="view-status" class="text-sm"></span><button onclick="closeLessonModal()" class="text-gray-500 hover:text-red-500 text-2xl px-2">&times;</button></div>
             </div>
             <div class="flex-1 overflow-y-auto space-y-4 pr-2 no-scrollbar">
@@ -1192,7 +1218,7 @@
 
     <!-- REPORT MODAL -->
     <div id="report-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-[70] p-4">
-        <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-5xl h-[80vh] flex flex-col">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-[95%] md:w-full md:max-w-5xl h-[85vh] flex flex-col">
             <div class="flex justify-between items-center mb-4 border-b pb-2"><h3 id="report-title" class="font-bold text-lg text-gray-800">Report View</h3><button onclick="closeReportModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button></div>
             <div id="report-content" class="flex-1 overflow-y-auto no-scrollbar"></div>
         </div>
@@ -1205,7 +1231,7 @@
 
     <!-- EDIT USER MODAL -->
     <div id="edit-user-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-[70]">
-        <div class="bg-white p-6 rounded-lg shadow-xl w-96"><h3 class="font-bold text-lg mb-4 text-gray-800">Edit Employee</h3><p class="text-sm text-gray-500 mb-4">Updating: <span id="edit-email-display" class="font-mono"></span></p><div class="space-y-4"><div><label class="block text-sm font-bold text-gray-700 mb-1">Full Name</label><input type="text" id="edit-name" class="w-full border p-2 rounded"></div><div><label class="block text-sm font-bold text-gray-700 mb-1">Role</label><select id="edit-role" class="w-full border p-2 rounded"><option value="teacher">Teacher</option><option value="staff">Staff / Ops</option><option value="security">Security</option><option value="nurse">Nurse</option><option value="principal">Principal</option><option value="assistant_principal">Assistant Principal</option></select></div></div><div class="flex justify-end gap-2 mt-6"><button onclick="closeEditModal()" class="px-4 py-2 border rounded hover:bg-gray-100 text-sm">Cancel</button><button onclick="saveUserEdit()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-bold">Save Changes</button></div></div>
+        <div class="bg-white p-6 rounded-lg shadow-xl w-96 m-2"><h3 class="font-bold text-lg mb-4 text-gray-800">Edit Employee</h3><p class="text-sm text-gray-500 mb-4">Updating: <span id="edit-email-display" class="font-mono"></span></p><div class="space-y-4"><div><label class="block text-sm font-bold text-gray-700 mb-1">Full Name</label><input type="text" id="edit-name" class="w-full border p-2 rounded"></div><div><label class="block text-sm font-bold text-gray-700 mb-1">Role</label><select id="edit-role" class="w-full border p-2 rounded"><option value="teacher">Teacher</option><option value="staff">Staff / Ops</option><option value="security">Security</option><option value="nurse">Nurse</option><option value="principal">Principal</option><option value="assistant_principal">Assistant Principal</option></select></div></div><div class="flex justify-end gap-2 mt-6"><button onclick="closeEditModal()" class="px-4 py-2 border rounded hover:bg-gray-100 text-sm">Cancel</button><button onclick="saveUserEdit()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-bold">Save Changes</button></div></div>
     </div>
 
     <!-- TOAST CONTAINER -->
@@ -1214,23 +1240,30 @@
     <!-- GLOBAL STATUS BAR -->
     <div id="global-status" class="fixed top-0 left-0 w-full bg-blue-600 text-white text-center py-1 hidden z-50">System Status: Active</div>
 
+    <!-- SIDEBAR OVERLAY (MOBILE) -->
+    <div id="sidebar-overlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black bg-opacity-50 z-40 hidden md:hidden"></div>
+
     <!-- VIEW 1: LOGIN -->
-    <div id="login-view" class="flex items-center justify-center h-full bg-slate-800">
-        <div class="bg-white p-8 rounded-lg shadow-xl w-96">
+    <div id="login-view" class="flex items-center justify-center h-full bg-slate-800 p-4">
+        <div class="bg-white p-8 rounded-lg shadow-xl w-full max-w-sm">
             <h2 class="text-2xl font-bold mb-6 text-center text-slate-800">CampusFlow Login</h2>
             <form onsubmit="handleLogin(event)">
                 <div class="mb-4"><label class="block text-sm font-bold mb-2">Email</label><input type="email" id="email" class="w-full p-2 border rounded" required></div>
                 <div class="mb-6"><label class="block text-sm font-bold mb-2">Password</label><input type="password" id="password" class="w-full p-2 border rounded" required></div>
-                <button type="submit" id="login-btn" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700">Login</button>
+                <button type="submit" id="login-btn" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700 font-bold">Login</button>
                 <div id="login-error" class="text-red-500 text-sm mt-4 text-center"></div>
             </form>
         </div>
     </div>
 
     <!-- VIEW 2: DASHBOARD -->
-    <div id="dashboard-view" class="hidden flex h-full">
-        <div class="w-64 bg-slate-900 text-white flex flex-col">
-            <div class="p-6 text-xl font-bold border-b border-slate-700">CampusFlow</div>
+    <div id="dashboard-view" class="hidden flex flex-col md:flex-row h-full">
+        <!-- SIDEBAR -->
+        <div id="main-sidebar" class="fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transform -translate-x-full md:relative md:translate-x-0 transition-transform duration-300">
+            <div class="p-6 text-xl font-bold border-b border-slate-700 flex justify-between items-center">
+                <span>CampusFlow</span>
+                <button onclick="toggleSidebar()" class="md:hidden text-gray-400">✕</button>
+            </div>
             <nav class="flex-1 p-4 space-y-2 overflow-y-auto no-scrollbar">
                 <button onclick="switchModule('module-academics', 'nav-academics')" id="nav-academics" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden">📚 Academics</button>
                 <button onclick="switchModule('module-ops', 'nav-ops')" id="nav-ops" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden">🔧 Operations</button>
@@ -1244,17 +1277,22 @@
                 <div class="text-xs text-slate-400">Logged in as:</div>
                 <div id="user-email-display" class="font-bold truncate">...</div>
                 <div id="user-role-display" class="text-xs text-blue-400 mb-2">...</div>
-                <button onclick="handleLogout()" class="w-full bg-red-600 text-white text-sm p-1 rounded">Logout</button>
+                <button onclick="handleLogout()" class="w-full bg-red-600 text-white text-sm p-2 rounded font-bold">Logout</button>
             </div>
         </div>
 
-        <div class="flex-1 bg-gray-100 flex flex-col relative">
-            <div id="top-bar" class="bg-white shadow p-4 flex justify-between items-center relative z-20 transition-colors duration-500">
-                <h1 class="text-xl font-bold">Dashboard</h1>
+        <!-- MAIN CONTENT -->
+        <div class="flex-1 bg-gray-100 flex flex-col relative w-full h-full overflow-hidden">
+            <!-- TOP BAR -->
+            <div id="top-bar" class="bg-white shadow p-4 flex justify-between items-center relative z-20 shrink-0">
+                <div class="flex items-center gap-3">
+                    <button onclick="toggleSidebar()" class="md:hidden text-2xl text-gray-600">☰</button>
+                    <h1 class="text-xl font-bold">Dashboard</h1>
+                </div>
                 <div class="flex items-center gap-4">
                      <div class="relative">
-                        <button id="notif-bell-btn" onclick="toggleNotifications()" class="p-2 hover:opacity-75 focus:outline-none">🔔</button>
-                        <div id="notification-panel" class="hidden absolute right-0 mt-2 w-80 bg-white border rounded shadow-xl p-0 text-sm text-gray-700 overflow-hidden z-50">
+                        <button id="notif-bell-btn" onclick="toggleNotifications()" class="p-2 hover:opacity-75 focus:outline-none text-xl">🔔</button>
+                        <div id="notification-panel" class="hidden absolute right-0 mt-2 w-72 md:w-80 bg-white border rounded shadow-xl p-0 text-sm text-gray-700 overflow-hidden z-50">
                             <div class="bg-gray-50 p-2 font-bold border-b flex justify-between items-center">
                                 <span>Global Activity Feed</span><button onclick="toggleNotifications()" class="text-xs text-gray-400 hover:text-red-500">✕</button>
                             </div>
@@ -1264,39 +1302,45 @@
                 </div>
             </div>
 
-            <div class="p-8 overflow-y-auto z-10 h-full no-scrollbar">
+            <!-- CONTENT AREA -->
+            <div class="flex-1 overflow-y-auto p-4 md:p-8 z-10 no-scrollbar min-h-0">
                 <!-- 0. WELCOME -->
-                <div id="welcome-module" class="content-module"><h2 class="text-3xl font-bold text-gray-800">Welcome back.</h2><p class="text-gray-600 mt-2">Select a module from the left to begin.</p></div>
+                <div id="welcome-module" class="content-module"><h2 class="text-3xl font-bold text-gray-800">Welcome back.</h2><p class="text-gray-600 mt-2">Select a module from the menu to begin.</p></div>
 
                 <!-- 1. ACADEMICS -->
                 <div id="module-academics" class="content-module hidden">
-                    <div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-bold">Academics</h2><span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span></div>
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
+                        <h2 class="text-2xl font-bold">Academics</h2>
+                        <span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span>
+                    </div>
                     <div class="employee-view">
-                        <div class="flex gap-6">
-                            <div class="flex-1 bg-white p-6 rounded shadow">
+                        <div class="flex flex-col lg:flex-row gap-6">
+                            <div class="flex-1 bg-white p-6 rounded shadow order-2 lg:order-1">
                                 <h3 class="font-bold mb-4 text-lg border-b pb-2">Digital Lesson Planner</h3>
-                                <div class="grid grid-cols-2 gap-4 mb-4">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Subject / Topic</label><input type="text" id="lesson-subject" class="w-full border p-2 rounded" placeholder="e.g. Science - Photosynthesis"></div>
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Materials Needed</label><input type="text" id="lesson-materials" class="w-full border p-2 rounded" placeholder="e.g. Projector, Lab Kits, Worksheets"></div>
                                 </div>
                                 <label class="block mb-1 font-bold text-sm text-gray-600">Lesson Objectives</label><textarea id="lesson-objective" class="w-full border p-2 mb-4 rounded h-20" placeholder="What will students learn?"></textarea>
-                                <div class="grid grid-cols-2 gap-4 mb-4">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Direct Instruction (I Do)</label><textarea id="lesson-instruction" class="w-full border p-2 rounded h-32" placeholder="Teacher input & modeling..."></textarea></div>
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Guided Teaching (We Do)</label><textarea id="lesson-guided" class="w-full border p-2 rounded h-32" placeholder="Group practice & scaffolding..."></textarea></div>
                                 </div>
-                                <div class="grid grid-cols-2 gap-4 mb-4">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Closure (You Do)</label><textarea id="lesson-closure" class="w-full border p-2 rounded h-20" placeholder="Independent practice & wrap-up..."></textarea></div>
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Assessment</label><textarea id="lesson-assessment" class="w-full border p-2 rounded h-20" placeholder="Exit ticket or quiz..."></textarea></div>
                                 </div>
-                                <button onclick="submitLessonPlan()" class="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 transition w-full font-bold">Submit Lesson Plan</button>
+                                <button onclick="submitLessonPlan()" class="bg-green-600 text-white px-6 py-3 rounded hover:bg-green-700 transition w-full font-bold">Submit Lesson Plan</button>
                             </div>
-                            <div class="w-80 bg-white p-4 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">My Lesson Plans (This Week)</h3><div id="lesson-history-list" class="space-y-3"><p class="text-gray-400 italic text-sm">Loading...</p></div></div>
+                            <div class="w-full lg:w-80 bg-white p-4 rounded shadow h-fit order-1 lg:order-2">
+                                <h3 class="font-bold text-gray-700 border-b pb-2 mb-4">My Lesson Plans</h3>
+                                <div id="lesson-history-list" class="space-y-3"><p class="text-gray-400 italic text-sm">Loading...</p></div>
+                            </div>
                         </div>
                     </div>
                     <div class="admin-view hidden space-y-6">
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="grid grid-cols-1 md:grid-cols-1 gap-6"> <!-- Adjusted grid -->
                             <div class="bg-white p-6 rounded shadow border-l-4 border-blue-500"><h3 class="font-bold text-gray-500 text-xs uppercase">Lesson Plans This Week</h3><div id="stat-lessons-today" class="text-3xl font-bold text-gray-800 mt-1">--</div><div class="text-xs text-gray-400">Since Sunday</div></div>
-                            <div class="bg-white p-6 rounded shadow border-l-4 border-purple-500"><h3 class="font-bold text-gray-500 text-xs uppercase">Quick Links</h3><div class="mt-2 space-y-1"><button onclick="openReportModal('Lesson Plans')" class="text-blue-500 hover:underline text-sm block">📄 View All Lesson Plans</button></div></div>
                         </div>
                         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-lg mb-4 border-b pb-2 text-yellow-700">Pending Reviews</h3><div id="admin-pending-lessons" class="space-y-2"><p class="text-gray-400 italic text-sm">Loading...</p></div></div>
@@ -1307,11 +1351,11 @@
 
                 <!-- 2. OPERATIONS -->
                 <div id="module-ops" class="content-module hidden">
-                    <div class="flex justify-between items-center mb-4">
-                        <div class="flex items-center gap-2"><h2 class="text-2xl font-bold">Operations & Maintenance</h2></div>
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
+                        <div class="flex items-center gap-2"><h2 class="text-2xl font-bold">Operations</h2></div>
                         <span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span>
                     </div>
-                    <div class="employee-view grid grid-cols-2 gap-6">
+                    <div class="employee-view grid grid-cols-1 lg:grid-cols-2 gap-6">
                         <div class="space-y-6">
                             <div class="bg-white p-6 rounded shadow">
                                 <h3 class="font-bold mb-4 text-lg">Report Maintenance Issue</h3>
@@ -1319,7 +1363,7 @@
                                 <div id="maint-type-container">
                                     <select id="maint-type" class="w-full border p-2 mb-4 rounded" onchange="checkMaintType(this)"><option>Plumbing</option><option>Electrical</option><option>Furniture</option><option>HVAC</option><option>Others</option></select>
                                 </div>
-                                <button onclick="submitMaintenance()" class="bg-blue-600 text-white px-4 py-2 rounded w-full hover:bg-blue-700">Submit Request</button>
+                                <button onclick="submitMaintenance()" class="bg-blue-600 text-white px-4 py-3 rounded w-full hover:bg-blue-700 font-bold">Submit Request</button>
                             </div>
                             <div class="bg-white p-6 rounded shadow">
                                 <h3 class="font-bold mb-4 text-lg">Equipment Checkout</h3>
@@ -1327,39 +1371,43 @@
                                 <input type="text" id="checkout-borrower" list="borrower-list" placeholder="Select Borrower..." class="w-full border p-2 mb-2 rounded">
                                 <datalist id="borrower-list"></datalist>
                                 <input type="text" id="checkout-purpose" placeholder="Purpose of use" class="w-full border p-2 mb-2 rounded">
-                                <button onclick="submitCheckout()" class="bg-slate-600 text-white px-4 py-2 rounded w-full hover:bg-slate-700">Log Checkout</button>
+                                <button onclick="submitCheckout()" class="bg-slate-600 text-white px-4 py-3 rounded w-full hover:bg-slate-700 font-bold">Log Checkout</button>
                             </div>
                         </div>
-                        <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Active Tasks (Open/Checked Out)</h3><div id="ops-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div></div>
+                        <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Active Tasks</h3><div id="ops-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div></div>
                     </div>
                     <div class="admin-view hidden space-y-6">
                         <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-lg mb-4 text-blue-800">Live Operations Monitor (Active)</h3><div id="admin-live-ops" class="space-y-2 grid grid-cols-1 md:grid-cols-2 gap-2">Loading...</div></div>
-                        <div class="grid grid-cols-3 gap-6"><div class="bg-white p-4 rounded shadow"><div class="text-gray-500 text-xs uppercase font-bold">Open Work Orders</div><div id="stat-open-work-orders" class="text-3xl font-bold text-orange-500">--</div></div></div>
-                        <div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg mb-4">Operations Overview</h3><button onclick="openHistoryModal('Operations')" class="bg-gray-100 text-gray-700 px-4 py-2 rounded border hover:bg-gray-200">📂 View All Logs</button></div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6"><div class="bg-white p-4 rounded shadow"><div class="text-gray-500 text-xs uppercase font-bold">Open Work Orders</div><div id="stat-open-work-orders" class="text-3xl font-bold text-orange-500">--</div></div></div>
+                        <div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg mb-4">Operations Overview</h3><button onclick="openHistoryModal('Operations')" class="bg-gray-100 text-gray-700 px-4 py-3 rounded border hover:bg-gray-200 w-full md:w-auto font-bold">📂 View All Logs</button></div>
                     </div>
                 </div>
 
                 <!-- 3. SAFETY -->
                 <div id="module-safety" class="content-module hidden">
-                    <div class="flex justify-between items-center mb-4">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
                         <div class="flex items-center gap-2"><h2 class="text-2xl font-bold">Safety & Visitor Log</h2></div>
                         <span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span>
                     </div>
                     <div id="teacher-safety-view" class="hidden mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded text-center text-yellow-800 text-sm">Visitor logging is restricted to Security personnel. You may only view active reports.</div>
                     <div id="visitor-entry-form" class="employee-view">
-                        <div id="security-monitor-view" class="mb-6"><div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg text-green-700 mb-4 flex items-center gap-2">🟢 Live Visitor Monitor <span class="text-xs font-normal text-gray-500 ml-2">(Currently On Campus)</span></h3><div id="visitor-monitor-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div></div></div>
+                        <div id="security-monitor-view" class="mb-6"><div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg text-green-700 mb-4 flex items-center gap-2">🟢 Live Visitor Monitor <span class="text-xs font-normal text-gray-500 ml-2">(On Campus)</span></h3><div id="visitor-monitor-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div></div></div>
                         
                         <div id="visitor-entry-section" class="bg-white p-6 rounded shadow mb-6 relative">
                             <h3 class="font-bold text-lg mb-2">New Visitor Entry</h3>
-                            <div class="flex gap-4"><input type="text" id="visitor-name" placeholder="Visitor Name" class="flex-1 border p-2 rounded"><input type="text" id="visitor-purpose" placeholder="Purpose" class="flex-1 border p-2 rounded"><button onclick="submitVisitor()" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">Log Entry</button></div>
+                            <div class="flex flex-col md:flex-row gap-4">
+                                <input type="text" id="visitor-name" placeholder="Visitor Name" class="flex-1 border p-2 rounded">
+                                <input type="text" id="visitor-purpose" placeholder="Purpose" class="flex-1 border p-2 rounded">
+                                <button onclick="submitVisitor()" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 font-bold">Log Entry</button>
+                            </div>
                         </div>
                         
-                        <div class="bg-red-50 p-6 rounded shadow border border-red-100"><h3 class="font-bold text-lg mb-2 text-red-700">Incident Report Logger</h3><textarea id="incident-details" placeholder="Describe incident details..." class="w-full border p-2 mb-2 rounded h-24"></textarea><button onclick="submitIncident()" class="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700">Submit Incident Report</button></div>
+                        <div class="bg-red-50 p-6 rounded shadow border border-red-100"><h3 class="font-bold text-lg mb-2 text-red-700">Incident Report Logger</h3><textarea id="incident-details" placeholder="Describe incident details..." class="w-full border p-2 mb-2 rounded h-24"></textarea><button onclick="submitIncident()" class="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 font-bold w-full md:w-auto">Submit Incident Report</button></div>
                     </div>
                     <div class="admin-view hidden">
-                        <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-lg mb-4 text-green-700">Active Visitors (Live)</h3><div id="admin-live-visitors" class="grid grid-cols-2 gap-2">Loading...</div></div>
+                        <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-lg mb-4 text-green-700">Active Visitors (Live)</h3><div id="admin-live-visitors" class="grid grid-cols-1 md:grid-cols-2 gap-2">Loading...</div></div>
                         <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-gray-700 mb-4">Campus Safety Status</h3><div class="grid grid-cols-2 gap-4"><div class="bg-green-50 border border-green-200 p-4 rounded text-center"><span class="block text-2xl font-bold text-green-700 text-sm">NORMAL</span><span class="text-xs text-green-600">Current Status</span></div><div class="bg-gray-50 border border-gray-200 p-4 rounded text-center"><span id="stat-visitors-today" class="block text-2xl font-bold text-gray-700">--</span><span class="text-xs text-gray-500">Visitors Today</span></div></div></div>
-                        <div class="grid grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <button onclick="openHistoryModal('Visitors')" class="bg-white border border-gray-300 text-gray-700 p-3 rounded hover:bg-gray-50 flex justify-between items-center mb-4"><span>📄 View Visitor Logs</span><span>→</span></button>
                             <button onclick="openHistoryModal('Incidents')" class="bg-red-50 border border-red-200 text-red-700 p-3 rounded hover:bg-red-100 flex justify-between items-center mb-4 font-bold"><span>🚨 Incident Reports</span><span>→</span></button>
                         </div>
@@ -1368,18 +1416,18 @@
 
                 <!-- 4. HEALTH -->
                 <div id="module-health" class="content-module hidden">
-                    <div class="flex justify-between items-center mb-4">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
                         <div class="flex items-center gap-2"><h2 class="text-2xl font-bold">Clinic & HR</h2></div>
                         <span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span>
                     </div>
-                    <div class="employee-view grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="employee-view grid grid-cols-1 lg:grid-cols-2 gap-6">
                         <div class="bg-white p-6 rounded shadow h-fit">
                             <h3 class="font-bold mb-2">Clinic Visit Log</h3>
                             <input type="text" id="clinic-student" list="clinic-student-list" placeholder="Student Name (Type to search)" class="w-full border p-2 mb-2 rounded">
                             <datalist id="clinic-student-list"></datalist>
                             <input type="text" id="clinic-symptoms" placeholder="Symptoms" class="w-full border p-2 mb-2 rounded">
                             <input type="text" id="clinic-action" placeholder="Action Taken" class="w-full border p-2 mb-4 rounded">
-                            <button onclick="submitClinic()" class="bg-red-500 text-white px-6 py-2 rounded hover:bg-red-600">Log Visit</button>
+                            <button onclick="submitClinic()" class="bg-red-500 text-white px-6 py-3 rounded hover:bg-red-600 font-bold w-full">Log Visit</button>
                         </div>
                         <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Currently Admitted</h3><div id="clinic-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div></div>
                     </div>
@@ -1406,7 +1454,7 @@
                                     <input id="enroll-password" type="text" placeholder="Set Password" class="border p-2 rounded" required>
                                     <select id="enroll-role" class="border p-2 rounded"><option value="teacher">Teacher</option><option value="staff">Staff / Ops</option><option value="security">Security</option><option value="nurse">Nurse</option><option value="principal">Principal</option><option value="assistant_principal">Assistant Principal</option></select>
                                 </div>
-                                <button type="submit" id="enroll-btn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-2 rounded font-bold w-full">Enroll User</button>
+                                <button type="submit" id="enroll-btn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-3 rounded font-bold w-full">Enroll User</button>
                             </form>
                         </div>
                         <div class="bg-white p-6 rounded shadow h-full">
@@ -1424,7 +1472,7 @@
                             <h3 class="font-bold text-lg mb-4">Batch Import</h3>
                             <p class="text-xs text-gray-500 mb-2">Format per line: ID, Name, Grade, Section</p>
                             <textarea id="student-batch-input" class="w-full border p-2 rounded h-40 text-sm mb-2" placeholder="2024001, John Doe, 10, Rizal&#10;2024002, Jane Smith, 11, Aguinaldo"></textarea>
-                            <div class="flex gap-2 mb-2">
+                            <div class="flex flex-col md:flex-row gap-2 mb-2">
                                 <label class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-center py-2 rounded text-sm cursor-pointer">
                                     📂 Import CSV
                                     <input type="file" class="hidden" accept=".csv" onchange="handleCSVUpload(this)">
@@ -1448,7 +1496,7 @@
                         <form id="password-form" onsubmit="handlePasswordChange(event)">
                             <label class="block mb-2 font-bold text-sm text-gray-600">New Password</label><input type="password" id="new-password" class="w-full border p-2 mb-4 rounded" required minlength="6">
                             <label class="block mb-2 font-bold text-sm text-gray-600">Confirm New Password</label><input type="password" id="confirm-password" class="w-full border p-2 mb-4 rounded" required minlength="6">
-                            <button type="submit" id="pwd-btn" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 w-full font-bold">Update Password</button>
+                            <button type="submit" id="pwd-btn" class="bg-blue-600 text-white px-6 py-3 rounded hover:bg-blue-700 w-full font-bold">Update Password</button>
                         </form>
                     </div>
                 </div>
