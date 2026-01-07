@@ -1,0 +1,1459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CampusFlow Command Center</title>
+    <!-- 1. Tailwind CSS (Styling) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Hide scrollbar for Chrome, Safari and Opera */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        /* Hide scrollbar for IE, Edge and Firefox */
+        .no-scrollbar {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+        }
+    </style>
+    
+    <!-- 2. Firebase SDKs -->
+    <script type="module">
+        import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, signOut, updatePassword, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, collection, query, where, orderBy, limit, getDocs, onSnapshot, serverTimestamp, Timestamp, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // ==========================================
+        // CONFIGURATION SECTION
+        // ==========================================
+        
+        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwxPBYz4-I8XN22u900NYhqxpf3bTdunbSl6WDGunv5HM0cXuSUhVLcM9LLXySBV9K-/exec";
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyBcI9x3WNq4IghDWYschzCumt5ew8xeL1I",
+            authDomain: "school-command-center.firebaseapp.com",
+            projectId: "school-command-center",
+            storageBucket: "school-command-center.firebasestorage.app",
+            messagingSenderId: "35914909502",
+            appId: "1:35914909502:web:ef37458e7a281e7feb8e6f"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Global State
+        let currentUserRole = "";
+        let currentUserName = ""; // Store for logging
+        let currentViewingDocId = null;
+        let notifLimit = 20; // Default limit
+        let activeListeners = []; // Store unsubscribe functions
+
+        // ==========================================
+        // HELPERS
+        // ==========================================
+
+        window.formatTimestamp = (ts) => {
+            if (!ts) return '-';
+            const date = ts.toDate();
+            const datePart = date.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: '2-digit' });
+            const timePart = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            return `${datePart} ${timePart}`;
+        };
+
+        async function logSystemAction(message) {
+            try {
+                // Use cached name or fallback to email
+                const displayName = currentUserName || auth.currentUser.email.split('@')[0];
+                await addDoc(collection(db, "logs"), {
+                    message: message,
+                    user: displayName, 
+                    email: auth.currentUser.email,
+                    role: currentUserRole,
+                    timestamp: serverTimestamp()
+                });
+            } catch (e) { console.error("Logging error", e); }
+        }
+
+        function clearListeners() {
+            activeListeners.forEach(unsub => unsub());
+            activeListeners = [];
+        }
+
+        // --- NOTIFICATIONS ---
+        
+        // Click outside to close
+        document.addEventListener('click', (e) => {
+            const panel = document.getElementById('notification-panel');
+            const btn = document.getElementById('notif-bell-btn');
+            if (!panel.classList.contains('hidden') && !panel.contains(e.target) && !btn.contains(e.target)) {
+                panel.classList.add('hidden');
+            }
+        });
+
+        window.toggleNotifications = async () => {
+            const panel = document.getElementById('notification-panel');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                // Scroll to bottom logic if needed, but list is ordered new->old
+            } else {
+                panel.classList.add('hidden');
+            }
+        };
+
+        function subscribeNotifications() {
+            const listContainer = document.getElementById('notification-list');
+            const q = query(collection(db, "logs"), orderBy("timestamp", "desc"), limit(notifLimit));
+            
+            const unsub = onSnapshot(q, (snapshot) => {
+                listContainer.innerHTML = "";
+                if (snapshot.empty) {
+                    listContainer.innerHTML = '<p class="text-gray-400 text-center italic p-2">No recent activity.</p>';
+                } else {
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        const time = window.formatTimestamp(data.timestamp);
+                        const item = document.createElement('div');
+                        item.className = "border-b border-gray-100 pb-2 mb-2 last:border-0 last:mb-0";
+                        item.innerHTML = `
+                            <div class="text-xs text-gray-400 flex justify-between">
+                                <span class="font-semibold text-blue-600">${data.user}</span>
+                                <span>${time}</span>
+                            </div>
+                            <div class="text-sm text-gray-700 font-medium">${data.message}</div>
+                        `;
+                        listContainer.appendChild(item);
+                    });
+                }
+            });
+            activeListeners.push(unsub);
+        }
+
+        window.showToast = (message, type = 'info') => {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgClass = type === 'error' ? 'bg-red-600' : (type === 'success' ? 'bg-green-600' : 'bg-blue-600');
+            toast.className = `${bgClass} text-white px-6 py-3 rounded shadow-lg transform transition-all duration-300 translate-y-10 opacity-0 flex items-center gap-2`;
+            toast.innerHTML = `<span>${type === 'error' ? '⚠️' : (type === 'success' ? '✅' : 'ℹ️')}</span><span>${message}</span>`;
+            container.appendChild(toast);
+            requestAnimationFrame(() => toast.classList.remove('translate-y-10', 'opacity-0'));
+            setTimeout(() => { toast.classList.add('opacity-0', 'translate-y-10'); setTimeout(() => toast.remove(), 300); }, 3000);
+        };
+
+        // --- MODALS ---
+        window.showCustomConfirm = (message, onConfirm) => {
+            const modal = document.getElementById('confirm-modal');
+            const yesBtn = document.getElementById('confirm-yes-btn');
+            document.getElementById('confirm-message').innerText = message;
+            yesBtn.onclick = () => { onConfirm(); closeConfirm(); };
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+        };
+
+        window.closeConfirm = () => {
+            const modal = document.getElementById('confirm-modal');
+            modal.classList.add('hidden'); modal.classList.remove('flex');
+        };
+
+        window.showCredentialsModal = (email, password) => {
+            const modal = document.getElementById('credentials-modal');
+            document.getElementById('cred-email').innerText = email;
+            document.getElementById('cred-password').innerText = password;
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+        };
+
+        window.closeCredentialsModal = () => {
+            const modal = document.getElementById('credentials-modal');
+            modal.classList.add('hidden'); modal.classList.remove('flex');
+            document.getElementById('cred-password').innerText = ""; 
+        };
+
+        // --- DYNAMIC LIST UPDATERS ---
+        window.updateDocStatus = async (collectionName, docId, newStatus, actionName) => {
+            showCustomConfirm(`Mark as ${newStatus}?`, async () => {
+                try {
+                    await updateDoc(doc(db, collectionName, docId), {
+                        status: newStatus,
+                        updatedAt: serverTimestamp()
+                    });
+                    showToast(`${actionName} successful`, "success");
+                    logSystemAction(`Updated status: ${actionName} (${newStatus})`); 
+                    // No manual refresh needed, onSnapshot handles it
+                } catch(e) { showToast("Error: " + e.message, "error"); }
+            });
+        };
+
+        // --- LESSON VIEW / REVIEW MODAL ---
+        window.openLessonModal = (docId, data, isAdminMode) => {
+            currentViewingDocId = docId;
+            const modal = document.getElementById('lesson-modal');
+            
+            // Populate fields
+            const fields = ['subject', 'objective', 'materials', 'instruction', 'guided', 'closure', 'assessment'];
+            fields.forEach(f => {
+                const el = document.getElementById('view-' + f);
+                if (el) {
+                    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value = data[f] || "";
+                    else el.innerText = data[f] || "N/A";
+                }
+            });
+
+            document.getElementById('view-teacher').innerText = (data.teacherEmail || "").split('@')[0];
+            document.getElementById('view-date').innerText = window.formatTimestamp(data.timestamp);
+            document.getElementById('view-status').innerText = data.status || "Pending";
+            
+            const statusEl = document.getElementById('view-status');
+            statusEl.className = "font-bold px-2 py-1 rounded text-xs " + 
+                (data.status === 'Approved' ? 'bg-green-100 text-green-700' : 
+                (data.status === 'Revision Needed' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-700'));
+
+            const adminSection = document.getElementById('admin-review-section');
+            const teacherFeedbackSection = document.getElementById('teacher-feedback-view');
+            const resubmitBtn = document.getElementById('lesson-resubmit-btn');
+            
+            // Reset editable state
+            document.querySelectorAll('.lesson-input').forEach(el => el.disabled = true);
+            resubmitBtn.classList.add('hidden');
+
+            if (isAdminMode) {
+                adminSection.classList.remove('hidden');
+                teacherFeedbackSection.classList.add('hidden');
+                document.getElementById('admin-feedback-input').value = data.adminFeedback || "";
+            } else {
+                adminSection.classList.add('hidden');
+                if (data.adminFeedback) {
+                    teacherFeedbackSection.classList.remove('hidden');
+                    document.getElementById('teacher-feedback-text').innerText = data.adminFeedback;
+                } else {
+                    teacherFeedbackSection.classList.add('hidden');
+                }
+
+                // Revision Mode for Teachers
+                if (currentUserRole === 'teacher' && data.status === 'Revision Needed') {
+                    document.querySelectorAll('.lesson-input').forEach(el => {
+                        el.disabled = false;
+                        el.classList.remove('bg-transparent', 'border-0');
+                        el.classList.add('border', 'p-2', 'bg-white');
+                    });
+                    resubmitBtn.classList.remove('hidden');
+                }
+            }
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+        };
+
+        window.closeLessonModal = () => {
+            const inputs = document.querySelectorAll('.lesson-input');
+            inputs.forEach(el => {
+                el.classList.add('bg-transparent', 'border-0');
+                el.classList.remove('border', 'p-2', 'bg-white');
+            });
+            document.getElementById('lesson-modal').classList.add('hidden');
+            document.getElementById('lesson-modal').classList.remove('flex');
+            currentViewingDocId = null;
+        };
+
+        window.submitLessonReview = async (status) => {
+            if (!currentViewingDocId) return;
+            const feedback = document.getElementById('admin-feedback-input').value;
+            try {
+                await updateDoc(doc(db, "lesson_plans", currentViewingDocId), {
+                    status: status,
+                    adminFeedback: feedback,
+                    reviewedAt: serverTimestamp(),
+                    reviewedBy: auth.currentUser.email
+                });
+                showToast(`Lesson Plan marked as ${status}`, "success");
+                logSystemAction(`Lesson Review: Marked ${status}`);
+                closeLessonModal();
+                // Stats auto-update via listeners
+            } catch(e) { showToast("Error updating status: " + e.message, "error"); }
+        };
+
+        window.resubmitLessonPlan = async () => {
+            if (!currentViewingDocId) return;
+            showCustomConfirm("Resubmit this lesson plan?", async () => {
+                try {
+                    const updates = {
+                        status: "Pending",
+                        updatedAt: serverTimestamp(),
+                        subject: document.getElementById('view-subject').value,
+                        objective: document.getElementById('view-objective').value,
+                        materials: document.getElementById('view-materials').value,
+                        instruction: document.getElementById('view-instruction').value,
+                        guided: document.getElementById('view-guided').value,
+                        closure: document.getElementById('view-closure').value,
+                        assessment: document.getElementById('view-assessment').value
+                    };
+                    await updateDoc(doc(db, "lesson_plans", currentViewingDocId), updates);
+                    showToast("Lesson Plan Resubmitted", "success");
+                    logSystemAction("Teacher resubmitted lesson plan");
+                    closeLessonModal();
+                } catch(e) { showToast("Error: " + e.message, "error"); }
+            });
+        };
+
+        // --- HISTORY / REPORT MODAL ---
+        window.openHistoryModal = async (reportType) => {
+            const modal = document.getElementById('report-modal');
+            const title = document.getElementById('report-title');
+            const content = document.getElementById('report-content');
+            
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+            title.innerText = `${reportType} History (Completed/Closed)`;
+            content.innerHTML = '<p class="text-center text-gray-500 animate-pulse p-4">Fetching history...</p>';
+
+            let collectionName = "", columns = [], statusFilter = [];
+
+            if (reportType === "Operations") {
+                collectionName = "operations_requests";
+                columns = ["Type", "Item/Loc", "Status", "Start Time", "End Time", "Logged By"];
+                statusFilter = ["Done", "Closed", "Returned"];
+            } else if (reportType === "Visitors") {
+                collectionName = "visitor_logs";
+                columns = ["Visitor Name", "Purpose", "Status", "Time In", "Time Out", "Logged By"];
+                statusFilter = ["Out"];
+            } else if (reportType === "Incidents") {
+                collectionName = "safety_logs";
+                columns = ["Type", "Details", "Date Reported", "Logged By"];
+                statusFilter = null;
+            } else if (reportType === "Health") {
+                collectionName = "health_logs";
+                columns = ["Student", "Symptoms", "Action Taken", "Admitted", "Discharged", "Logged By"];
+                statusFilter = ["Discharged"];
+            } else if (reportType === "Lesson Plans") {
+                collectionName = "lesson_plans";
+                columns = ["Status", "Subject", "Submitted", "Reviewed", "Teacher (Logged By)"];
+                statusFilter = null; 
+            }
+
+            try {
+                // Keep getDocs for History modal as it doesn't need to be real-time open connection
+                const q = query(collection(db, collectionName), limit(50));
+                const querySnapshot = await getDocs(q);
+                if (querySnapshot.empty) { content.innerHTML = '<p class="text-center text-gray-500 p-4">No records found.</p>'; return; }
+
+                let rows = [];
+                querySnapshot.forEach(doc => {
+                    const d = doc.data();
+                    if (!statusFilter || statusFilter.includes(d.status)) {
+                        rows.push({id: doc.id, ...d});
+                    }
+                });
+                
+                if(reportType === "Lesson Plans" || reportType === "Incidents") { rows = []; querySnapshot.forEach(doc => rows.push({id: doc.id, ...doc.data()})); }
+
+                rows.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+
+                let tableHtml = `<div class="overflow-x-auto"><table class="min-w-full bg-white border"><thead class="bg-gray-100"><tr>${columns.map(c => `<th class="py-2 px-4 border text-left text-xs font-bold text-gray-600 uppercase">${c}</th>`).join('')}</tr></thead><tbody>`;
+
+                rows.forEach(r => {
+                    const t1 = window.formatTimestamp(r.timestamp); // Start
+                    const t2 = r.updatedAt ? window.formatTimestamp(r.updatedAt) : '-'; // End/Update
+                    const safeUser = (email) => (email || "Unknown").split('@')[0];
+                    let rowData = "";
+                    let rowClass = "border-b ";
+
+                    if (reportType === "Lesson Plans") {
+                        const statusColor = r.status === 'Approved' ? 'text-green-600' : (r.status === 'Revision Needed' ? 'text-orange-600' : 'text-gray-500');
+                        rowData = `<td class="font-bold ${statusColor}">${r.status || 'Pending'}</td><td>${r.subject}</td><td>${t1}</td><td>${r.reviewedAt ? window.formatTimestamp(r.reviewedAt) : '-'}</td><td>${safeUser(r.teacherEmail)}</td>`;
+                    } else if (reportType === "Operations") {
+                        rowData = `<td>${r.type}</td><td>${r.location || r.item}</td><td><span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">${r.status}</span></td><td>${t1}</td><td>${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
+                    } else if (reportType === "Visitors") {
+                        rowData = `<td>${r.name}</td><td>${r.purpose}</td><td><span class="text-red-500 font-bold">Out</span></td><td>${t1}</td><td>${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
+                    } else if (reportType === "Incidents") {
+                         rowData = `<td>${r.type}</td><td>${r.details}</td><td>${t1}</td><td>${safeUser(r.submittedBy)}</td>`;
+                    } else if (reportType === "Health") {
+                        rowData = `<td>${r.student}</td><td>${r.symptoms || r.notes}</td><td>${r.action || '-'}</td><td>${t1}</td><td>${t2}</td><td>${safeUser(r.submittedBy)}</td>`;
+                    }
+                    tableHtml += `<tr class="${rowClass}">${rowData}</tr>`;
+                });
+                tableHtml += `</tbody></table></div>`;
+                content.innerHTML = tableHtml;
+            } catch (error) { content.innerHTML = `<p class="text-center text-red-500 p-4">Error loading data: ${error.message}</p>`; }
+        };
+
+        window.closeReportModal = () => {
+            const modal = document.getElementById('report-modal');
+            modal.classList.add('hidden'); modal.classList.remove('flex');
+        };
+
+        // EDIT USER MODAL
+        let editingUserEmail = null;
+        window.openEditModal = (email, name, role, position) => {
+            editingUserEmail = email;
+            document.getElementById('edit-email-display').innerText = email;
+            document.getElementById('edit-name').value = name;
+            document.getElementById('edit-role').value = role;
+            const modal = document.getElementById('edit-user-modal');
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+        };
+
+        window.closeEditModal = () => {
+            document.getElementById('edit-user-modal').classList.add('hidden');
+            document.getElementById('edit-user-modal').classList.remove('flex');
+            editingUserEmail = null;
+        };
+
+        window.saveUserEdit = async () => {
+            const newName = document.getElementById('edit-name').value;
+            const newRole = document.getElementById('edit-role').value;
+            if (!newName) return showToast("Name is required", "error");
+            try {
+                await updateDoc(doc(db, "users", editingUserEmail), { displayName: newName, role: newRole });
+                showToast("User updated successfully", "success");
+                logSystemAction(`Admin updated user: ${newName}`);
+                closeEditModal();
+                loadEmployeeDirectory(); 
+            } catch(e) { showToast("Error updating user: " + e.message, "error"); }
+        };
+
+        // ==========================================
+        // AUTH
+        // ==========================================
+        window.handleLogin = async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value.toLowerCase().trim();
+            const password = document.getElementById('password').value;
+            const errorMsg = document.getElementById('login-error');
+            const loginBtn = document.getElementById('login-btn');
+
+            try {
+                errorMsg.innerHTML = ""; loginBtn.innerText = "Verifying..."; loginBtn.disabled = true;
+                await signInWithEmailAndPassword(auth, email, password);
+                const docSnap = await getDoc(doc(db, "users", email));
+                if (docSnap.exists()) {
+                    const d = docSnap.data();
+                    currentUserRole = d.role;
+                    currentUserName = d.displayName || email.split('@')[0]; // Cache Name
+                    showDashboard();
+                    showToast(`Welcome back, ${currentUserName}!`, "success");
+                } else {
+                    errorMsg.innerText = "Access Denied."; await signOut(auth);
+                    loginBtn.innerText = "Login"; loginBtn.disabled = false;
+                }
+            } catch (error) {
+                console.error("Login Error:", error);
+                errorMsg.innerText = "Login Failed: " + error.message;
+                loginBtn.innerText = "Login"; loginBtn.disabled = false;
+            }
+        };
+
+        window.handleLogout = async () => {
+            clearListeners();
+            await signOut(auth);
+            location.reload(); 
+        };
+
+        // ==========================================
+        // DASHBOARD
+        // ==========================================
+        function showDashboard() {
+            document.getElementById('login-view').classList.add('hidden');
+            document.getElementById('dashboard-view').classList.remove('hidden');
+            
+            const roleDisplay = currentUserRole.replace('_', ' ').toUpperCase(); 
+            document.getElementById('user-role-display').innerText = roleDisplay;
+            document.getElementById('user-email-display').innerText = auth.currentUser.email;
+
+            const navIds = ['nav-academics', 'nav-ops', 'nav-safety', 'nav-health', 'nav-admin', 'nav-students'];
+            navIds.forEach(id => document.getElementById(id).classList.add('hidden'));
+
+            const isManagement = ['principal', 'assistant_principal'].includes(currentUserRole);
+
+            if (isManagement) {
+                navIds.forEach(id => document.getElementById(id).classList.remove('hidden'));
+            }
+            else if (currentUserRole === 'teacher') {
+                document.getElementById('nav-academics').classList.remove('hidden');
+                document.getElementById('nav-safety').classList.remove('hidden');
+                // Adjust teacher safety view
+                document.getElementById('teacher-safety-view').classList.add('hidden');
+                document.getElementById('security-monitor-view').classList.add('hidden');
+                document.getElementById('visitor-entry-form').classList.remove('hidden');
+                // Grey out visitor entry specific section only
+                document.getElementById('visitor-entry-section').classList.add('opacity-50', 'pointer-events-none', 'relative');
+            } else if (currentUserRole === 'staff') document.getElementById('nav-ops').classList.remove('hidden');
+            else if (currentUserRole === 'security') {
+                document.getElementById('nav-safety').classList.remove('hidden');
+                document.getElementById('security-monitor-view').classList.remove('hidden');
+                document.getElementById('visitor-entry-form').classList.remove('hidden');
+                document.getElementById('visitor-entry-section').classList.remove('opacity-50', 'pointer-events-none', 'relative');
+                document.getElementById('teacher-safety-view').classList.add('hidden');
+            }
+            else if (currentUserRole === 'nurse') document.getElementById('nav-health').classList.remove('hidden');
+
+            const employeeViews = document.querySelectorAll('.employee-view');
+            const adminViews = document.querySelectorAll('.admin-view');
+
+            if (isManagement) {
+                employeeViews.forEach(el => el.classList.add('hidden'));
+                adminViews.forEach(el => el.classList.remove('hidden'));
+                loadEmployeeDirectory();
+                subscribeAdminStats(); 
+                loadStudents();
+                subscribeAdminHealthHistory(); // New subscriber for admin health history
+            } else {
+                employeeViews.forEach(el => el.classList.remove('hidden'));
+                adminViews.forEach(el => el.classList.add('hidden'));
+            }
+
+            // REAL-TIME LISTENERS
+            subscribeNotifications(); // Activity feed
+            if (currentUserRole === 'teacher') subscribeLessonHistory();
+            if (currentUserRole === 'security') subscribeVisitorMonitor();
+            if (currentUserRole === 'staff') {
+                subscribeActiveOps(); 
+                loadBorrowers(); 
+            }
+            if (currentUserRole === 'nurse') {
+                subscribeActiveClinic();
+                loadStudentOptions('clinic-student-list');
+            }
+            
+            document.getElementById('nav-profile').classList.remove('hidden');
+            // Highlight initial tab properly
+            switchModule('welcome-module', null); 
+        }
+
+        window.switchModule = (moduleId, btnId) => {
+            const modules = document.querySelectorAll('.content-module');
+            modules.forEach(mod => mod.classList.add('hidden'));
+            document.getElementById(moduleId).classList.remove('hidden');
+
+            // Sidebar Active State
+            const navBtns = document.querySelectorAll('nav button');
+            navBtns.forEach(btn => {
+                btn.classList.remove('bg-slate-700', 'border-l-4', 'border-blue-500');
+                btn.classList.add('hover:bg-slate-800');
+            });
+            if (btnId) {
+                const btn = document.getElementById(btnId);
+                if(btn) {
+                    btn.classList.add('bg-slate-700', 'border-l-4', 'border-blue-500');
+                    btn.classList.remove('hover:bg-slate-800');
+                }
+            }
+        };
+
+        // ==========================================
+        // DYNAMIC LOADERS (REAL TIME)
+        // ==========================================
+
+        async function loadBorrowers() {
+            const datalist = document.getElementById('borrower-list');
+            if(!datalist) return;
+            try {
+                const q = query(collection(db, "users"), orderBy("displayName"));
+                const snap = await getDocs(q);
+                datalist.innerHTML = '';
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    const opt = document.createElement('option');
+                    opt.value = d.displayName || d.email;
+                    datalist.appendChild(opt);
+                });
+            } catch(e){ console.error("Error loading borrowers", e); }
+        }
+
+        async function loadStudentOptions(datalistId) {
+            const datalist = document.getElementById(datalistId);
+            if(!datalist) return;
+            try {
+                const q = query(collection(db, "students"), limit(100)); // Limit for performance
+                const snap = await getDocs(q);
+                datalist.innerHTML = '';
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    const opt = document.createElement('option');
+                    opt.value = d.fullName;
+                    opt.label = `${d.studentId} - ${d.grade} ${d.section}`;
+                    datalist.appendChild(opt);
+                });
+            } catch(e) {}
+        }
+
+        // 1. TEACHER: LESSON HISTORY (Real-time)
+        function subscribeLessonHistory() {
+            const container = document.getElementById('lesson-history-list');
+            if(!container) return; 
+            
+            const userEmail = auth.currentUser.email;
+            // FIX: Removed orderBy to prevent compound query index error, fetch more to handle filtering
+            const q = query(collection(db, "lesson_plans"), where("teacherEmail", "==", userEmail), limit(100));
+            
+            const unsub = onSnapshot(q, (snapshot) => {
+                container.innerHTML = "";
+                if (snapshot.empty) { container.innerHTML = '<div class="p-4 text-center text-gray-400 bg-gray-50 rounded">No lesson plans submitted.</div>'; return; } 
+                
+                let allDocs = [];
+                snapshot.forEach(doc => allDocs.push({id: doc.id, ...doc.data()}));
+                // Manual Sort
+                allDocs.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+
+                // Filter logic
+                const today = new Date();
+                const day = today.getDay(); 
+                const startOfWeek = new Date(today);
+                startOfWeek.setDate(today.getDate() - day);
+                startOfWeek.setHours(0,0,0,0);
+
+                const thisWeek = [];
+                const older = [];
+
+                allDocs.forEach(data => {
+                    const dDate = data.timestamp ? data.timestamp.toDate() : new Date(0);
+                    if(dDate >= startOfWeek) thisWeek.push(data);
+                    else older.push(data);
+                });
+
+                const renderItem = (data) => {
+                    const date = window.formatTimestamp(data.timestamp);
+                    const statusColor = data.status === 'Approved' ? 'bg-green-100 text-green-700' : (data.status === 'Revision Needed' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600');
+                    const item = document.createElement('div');
+                    item.className = "bg-white p-4 rounded shadow-sm border border-gray-100 mb-3 cursor-pointer hover:border-blue-300 transition group";
+                    item.onclick = () => window.openLessonModal(data.id, data, false);
+                    item.innerHTML = `<div class="flex justify-between items-start"><div class="overflow-hidden"><h4 class="font-bold text-gray-800 truncate">${data.subject}</h4><p class="text-xs text-gray-500 truncate max-w-[150px]">${data.objective}</p></div><div class="text-right shrink-0"><span class="text-xs px-2 py-1 rounded-full font-bold ${statusColor}">${data.status || 'Pending'}</span><div class="text-xs text-gray-400 mt-1">${date}</div></div></div>`;
+                    return item;
+                };
+
+                // Render This Week
+                if(thisWeek.length > 0) {
+                    container.innerHTML += `<div class="text-xs font-bold text-gray-400 uppercase mb-2 bg-gray-50 p-1 rounded">This Week</div>`;
+                    thisWeek.forEach(d => container.appendChild(renderItem(d)));
+                } else {
+                    container.innerHTML += `<div class="p-2 text-center text-gray-400 text-sm italic mb-4">No plans this week.</div>`;
+                }
+
+                // Render Older Toggle
+                if(older.length > 0) {
+                    const olderContainer = document.createElement('div');
+                    olderContainer.className = "hidden mt-4 border-t pt-2";
+                    olderContainer.innerHTML = `<div class="text-xs font-bold text-gray-400 uppercase mb-2 bg-gray-50 p-1 rounded">Previous Weeks</div>`;
+                    older.forEach(d => olderContainer.appendChild(renderItem(d)));
+
+                    const toggleBtn = document.createElement('button');
+                    toggleBtn.className = "w-full text-xs text-blue-500 hover:bg-blue-50 py-2 rounded mt-2 border border-blue-100";
+                    toggleBtn.innerText = `View Previous Weeks (${older.length})`;
+                    toggleBtn.onclick = function() {
+                        olderContainer.classList.remove('hidden');
+                        this.classList.add('hidden');
+                    };
+
+                    container.appendChild(toggleBtn);
+                    container.appendChild(olderContainer);
+                }
+            });
+            activeListeners.push(unsub);
+        }
+
+        // 2. SECURITY: VISITOR MONITOR (Real-time)
+        function subscribeVisitorMonitor() {
+            const container = document.getElementById('visitor-monitor-list');
+            if(!container) return;
+            
+            const q = query(collection(db, "visitor_logs"), where("status", "==", "In"), limit(50));
+            
+            const unsub = onSnapshot(q, (snapshot) => {
+                container.innerHTML = "";
+                if(snapshot.empty) {
+                    container.innerHTML = '<div class="p-4 text-center text-green-600 bg-green-50 rounded">All Clear. No visitors currently logged in.</div>';
+                } else {
+                    snapshot.forEach(doc => {
+                        const d = doc.data();
+                        const time = window.formatTimestamp(d.timestamp);
+                        const row = document.createElement('div');
+                        row.className = "flex justify-between items-center bg-white p-3 rounded border shadow-sm";
+                        row.innerHTML = `<div><div class="font-bold text-gray-800">${d.name}</div><div class="text-xs text-gray-500">${d.purpose} • In: ${time}</div></div><button onclick="updateDocStatus('visitor_logs', '${doc.id}', 'Out', 'Visitor Check-out')" class="bg-red-100 text-red-600 text-xs px-3 py-2 rounded font-bold hover:bg-red-200">Check Out</button>`;
+                        container.appendChild(row);
+                    });
+                }
+            });
+            activeListeners.push(unsub);
+        }
+
+        // 3. STAFF: OPS MONITOR (Real-time)
+        function subscribeActiveOps() {
+            const container = document.getElementById('ops-active-list');
+            if(!container) return;
+            
+            // Note: Simple query for listener, filter in memory for complex OR logic
+            const q = query(collection(db, "operations_requests"), limit(50)); 
+            
+            const unsub = onSnapshot(q, (snapshot) => {
+                container.innerHTML = "";
+                let hasItems = false;
+                snapshot.forEach(doc => {
+                    const d = doc.data();
+                    if(d.status !== 'Closed' && d.status !== 'Done' && d.status !== 'Returned') {
+                        hasItems = true;
+                        const actionBtn = d.type === 'Checkout' 
+                            ? `<button onclick="updateDocStatus('operations_requests', '${doc.id}', 'Returned', 'Return Item')" class="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded">Return</button>`
+                            : `<button onclick="updateDocStatus('operations_requests', '${doc.id}', 'Done', 'Close Ticket')" class="text-xs bg-green-100 text-green-600 px-2 py-1 rounded">Mark Done</button>`;
+                        const item = document.createElement('div');
+                        item.className = "bg-white p-3 rounded border flex justify-between items-center mb-2";
+                        const title = d.type === 'Checkout' ? `${d.item} (Borrower: ${d.borrower || 'N/A'})` : (d.location || d.item);
+                        item.innerHTML = `<div><div class="font-bold text-sm">${title}</div><div class="text-xs text-gray-500">${d.type} • ${d.status}</div></div>${actionBtn}`;
+                        container.appendChild(item);
+                    }
+                });
+                if(!hasItems) container.innerHTML = '<div class="text-sm text-gray-400 italic">No active requests.</div>';
+            });
+            activeListeners.push(unsub);
+        }
+
+        // 4. NURSE: CLINIC MONITOR (Real-time)
+        function subscribeActiveClinic() {
+            const container = document.getElementById('clinic-active-list');
+            if(!container) return;
+            
+            const q = query(collection(db, "health_logs"), limit(50));
+            
+            const unsub = onSnapshot(q, (snapshot) => {
+                container.innerHTML = "";
+                let hasItems = false;
+                snapshot.forEach(doc => {
+                    const d = doc.data();
+                    if(d.status !== 'Discharged') {
+                        hasItems = true;
+                        const item = document.createElement('div');
+                        item.className = "bg-white p-3 rounded border flex justify-between items-center mb-2";
+                        item.innerHTML = `<div><div class="font-bold text-sm">${d.student}</div><div class="text-xs text-gray-500">Admitted: ${window.formatTimestamp(d.timestamp)}</div></div><button onclick="updateDocStatus('health_logs', '${doc.id}', 'Discharged', 'Discharge Student')" class="text-xs bg-green-100 text-green-600 px-2 py-1 rounded">Discharge</button>`;
+                        container.appendChild(item);
+                    }
+                });
+                if(!hasItems) container.innerHTML = '<div class="text-sm text-gray-400 italic">Clinic is empty.</div>';
+            });
+            activeListeners.push(unsub);
+        }
+
+        // 5. ADMIN: STATS & MONITORS (Real-time)
+        function subscribeAdminStats() {
+            if (!['principal', 'assistant_principal'].includes(currentUserRole)) return;
+            
+            // Visitors
+            const qVisitor = query(collection(db, "visitor_logs"), where("status", "==", "In"));
+            activeListeners.push(onSnapshot(qVisitor, (snap) => {
+                const container = document.getElementById('admin-live-visitors');
+                container.innerHTML = "";
+                if(snap.empty) container.innerHTML = '<span class="text-gray-400 text-xs">No active visitors</span>';
+                else {
+                    snap.forEach(doc => container.innerHTML += `<div class="text-xs border-b py-1">${doc.data().name} (${doc.data().purpose})</div>`);
+                }
+                document.getElementById('stat-visitors-today').innerText = snap.size; 
+            }));
+
+            // Ops
+            const qOps = query(collection(db, "operations_requests"), limit(50));
+            activeListeners.push(onSnapshot(qOps, (snap) => {
+                const container = document.getElementById('admin-live-ops');
+                container.innerHTML = "";
+                let count = 0;
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    if (d.status !== 'Closed' && d.status !== 'Done' && d.status !== 'Returned') {
+                        count++;
+                        const title = d.type === 'Checkout' ? `Out: ${d.item}` : `Fix: ${d.location}`;
+                        container.innerHTML += `<div class="text-xs border-b py-1">${title}</div>`;
+                    }
+                });
+                if(count === 0) container.innerHTML = '<span class="text-gray-400 text-xs">No active tasks</span>';
+                document.getElementById('stat-open-work-orders').innerText = count;
+            }));
+
+            // Clinic
+            const qHealth = query(collection(db, "health_logs"), limit(50));
+            activeListeners.push(onSnapshot(qHealth, (snap) => {
+                const container = document.getElementById('admin-live-clinic');
+                container.innerHTML = "";
+                let count = 0;
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    if (d.status !== 'Discharged') {
+                        count++;
+                        container.innerHTML += `<div class="text-xs border-b py-1">${d.student}</div>`;
+                    }
+                });
+                if(count === 0) container.innerHTML = '<span class="text-gray-400 text-xs">Clinic empty</span>';
+            }));
+
+            // Lessons
+            const qLessons = query(collection(db, "lesson_plans"), limit(50));
+            activeListeners.push(onSnapshot(qLessons, (snap) => {
+                const pendingList = document.getElementById('admin-pending-lessons');
+                const approvedList = document.getElementById('admin-approved-lessons');
+                pendingList.innerHTML = ""; approvedList.innerHTML = "";
+                
+                let hasPending = false, hasApproved = false, weekCount = 0;
+                const today = new Date();
+                const day = today.getDay(); 
+                const startOfWeek = new Date(today);
+                startOfWeek.setDate(today.getDate() - day);
+                startOfWeek.setHours(0,0,0,0);
+
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    if (d.timestamp.toDate() >= startOfWeek) weekCount++;
+                    
+                    const item = document.createElement('div');
+                    item.className = "p-3 bg-white border rounded hover:bg-gray-50 cursor-pointer flex justify-between items-center";
+                    item.onclick = () => window.openLessonModal(doc.id, d, true);
+                    item.innerHTML = `<div><div class="font-bold text-sm text-gray-800">${d.subject}</div><div class="text-xs text-gray-500">${(d.teacherEmail||'').split('@')[0]}</div></div><span class="text-xs px-2 py-1 rounded bg-${d.status === 'Approved' ? 'green' : 'yellow'}-100 text-${d.status === 'Approved' ? 'green' : 'yellow'}-700">${d.status}</span>`;
+
+                    if(d.status === 'Pending' || d.status === 'Revision Needed') {
+                        hasPending = true; pendingList.appendChild(item);
+                    } else if (d.status === 'Approved') {
+                        hasApproved = true; approvedList.appendChild(item);
+                    }
+                });
+                if(!hasPending) pendingList.innerHTML = '<div class="text-sm text-gray-400 italic">No pending reviews.</div>';
+                if(!hasApproved) approvedList.innerHTML = '<div class="text-sm text-gray-400 italic">No approved plans recently.</div>';
+                document.getElementById('stat-lessons-today').innerText = weekCount;
+            }));
+        }
+
+        // New function to display health history list directly in admin view
+        function subscribeAdminHealthHistory() {
+            const container = document.getElementById('admin-health-history-list');
+            if(!container) return;
+            
+            // FIX: Removed orderBy to prevent compound query index error
+            const q = query(collection(db, "health_logs"), where("status", "==", "Discharged"), limit(20));
+            
+            const unsub = onSnapshot(q, (snapshot) => {
+                if (snapshot.empty) { 
+                    container.innerHTML = '<p class="text-sm text-gray-400 italic">No completed records.</p>'; 
+                    return;
+                }
+                
+                // Manual Sort in Memory
+                let docs = [];
+                snapshot.forEach(doc => docs.push(doc.data()));
+                docs.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+
+                let html = '<table class="min-w-full text-sm text-left"><thead class="bg-gray-50 text-xs font-bold text-gray-500"><tr><th class="p-2">Student</th><th class="p-2">Symptoms</th><th class="p-2">Action Taken</th><th class="p-2">Admitted</th><th class="p-2">Discharged</th></tr></thead><tbody>';
+                docs.forEach(d => {
+                    html += `<tr class="border-b">
+                        <td class="p-2 font-bold">${d.student}</td>
+                        <td class="p-2 truncate max-w-[100px]" title="${d.symptoms}">${d.symptoms || '-'}</td>
+                        <td class="p-2 truncate max-w-[100px]" title="${d.action}">${d.action || '-'}</td>
+                        <td class="p-2 text-xs text-gray-500">${window.formatTimestamp(d.timestamp)}</td>
+                        <td class="p-2 text-xs text-gray-500">${d.updatedAt ? window.formatTimestamp(d.updatedAt) : '-'}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            });
+            activeListeners.push(unsub);
+        }
+
+        async function loadEmployeeDirectory() {
+            const container = document.getElementById('employee-list-container');
+            container.innerHTML = '<p class="text-gray-500 animate-pulse">Loading directory...</p>';
+            try {
+                const q = query(collection(db, "users"), orderBy("role"));
+                const querySnapshot = await getDocs(q);
+                container.innerHTML = ""; 
+                if (querySnapshot.empty) { container.innerHTML = '<p>No users found.</p>'; return; }
+
+                const grouped = {};
+                querySnapshot.forEach(doc => {
+                    const data = doc.data();
+                    const role = data.role || "Unknown";
+                    if (!grouped[role]) grouped[role] = [];
+                    grouped[role].push({ id: doc.id, ...data });
+                });
+
+                for (const [role, users] of Object.entries(grouped)) {
+                    const groupDiv = document.createElement('div');
+                    groupDiv.className = "mb-6";
+                    groupDiv.innerHTML = `<h4 class="font-bold text-gray-700 uppercase text-xs border-b border-gray-300 mb-2 pb-1">${role.replace('_', ' ')}s (${users.length})</h4>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4"> 
+                            ${users.map(u => `
+                                <div class="bg-gray-50 p-4 rounded border text-sm relative group hover:shadow-md transition">
+                                    <div class="flex items-center gap-4">
+                                        <div class="bg-blue-100 text-blue-600 rounded-full w-10 h-10 flex items-center justify-center font-bold text-lg shrink-0">
+                                            ${(u.displayName || u.id).substring(0,2).toUpperCase()}
+                                        </div>
+                                        <div class="overflow-hidden flex-1">
+                                            <div class="font-bold text-base truncate">${u.displayName || 'No Name Set'}</div>
+                                            <div class="text-xs text-blue-600 font-bold">${u.position || role}</div>
+                                            <div class="text-xs text-gray-500 truncate">${u.id}</div>
+                                        </div>
+                                    </div>
+                                    <div class="mt-3 flex gap-2 border-t pt-2">
+                                        <button onclick="openEditModal('${u.id}', '${u.displayName || ''}', '${u.role}', '${u.position || ''}')" class="flex-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 py-2 rounded font-bold">Edit</button>
+                                        <button onclick="deleteUser('${u.id}')" class="flex-1 text-xs bg-red-100 hover:bg-red-200 text-red-600 py-2 rounded font-bold">Delete</button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>`;
+                    container.appendChild(groupDiv);
+                }
+                showToast("Directory Refreshed", "success");
+            } catch (error) { container.innerHTML = '<p class="text-red-500">Error loading directory.</p>'; }
+        }
+
+        // --- STUDENTS REGISTRY ---
+        async function loadStudents() {
+            const container = document.getElementById('student-list-container');
+            container.innerHTML = '<p class="text-gray-500 italic">Loading students...</p>';
+            try {
+                const q = query(collection(db, "students"), orderBy("grade"), limit(100));
+                const snap = await getDocs(q);
+                container.innerHTML = "";
+                if(snap.empty) { container.innerHTML = '<p class="text-gray-500">No students recorded.</p>'; return; }
+                
+                let html = '<table class="min-w-full text-sm text-left"><thead class="bg-gray-100 text-xs uppercase font-bold text-gray-600"><tr><th class="p-2">ID</th><th class="p-2">Name</th><th class="p-2">Grade</th><th class="p-2">Section</th><th class="p-2 text-right">Action</th></tr></thead><tbody>';
+                snap.forEach(doc => {
+                    const s = doc.data();
+                    html += `<tr class="border-b hover:bg-gray-50">
+                        <td class="p-2 font-mono">${s.studentId}</td>
+                        <td class="p-2 font-bold">${s.fullName}</td>
+                        <td class="p-2">${s.grade}</td>
+                        <td class="p-2">${s.section}</td>
+                        <td class="p-2 text-right">
+                            <button onclick="deleteStudent('${doc.id}')" class="text-red-500 hover:text-red-700 font-bold">✕</button>
+                        </td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch(e) { container.innerHTML = "Error loading students."; }
+        }
+
+        window.batchAddStudents = async () => {
+            const text = document.getElementById('student-batch-input').value.trim();
+            if(!text) return;
+            const lines = text.split('\n');
+            const batch = writeBatch(db);
+            let count = 0;
+            
+            lines.forEach(line => {
+                const parts = line.split(',').map(s => s.trim());
+                if(parts.length >= 2) {
+                    const [id, name, grade, section] = parts;
+                    const docRef = doc(collection(db, "students"));
+                    batch.set(docRef, { studentId: id, fullName: name, grade: grade || "", section: section || "", createdAt: serverTimestamp() });
+                    count++;
+                }
+            });
+
+            try {
+                await batch.commit();
+                showToast(`Added ${count} students`, "success");
+                document.getElementById('student-batch-input').value = "";
+                loadStudents();
+            } catch(e) { showToast("Batch Error: " + e.message, "error"); }
+        };
+
+        window.deleteStudent = async (id) => {
+             showCustomConfirm("Delete student?", async () => {
+                await deleteDoc(doc(db, "students", id));
+                loadStudents();
+             });
+        };
+
+        window.handleCSVUpload = (input) => {
+            const file = input.files[0];
+            if(!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                document.getElementById('student-batch-input').value = text;
+            };
+            reader.readAsText(file);
+        };
+
+        window.refreshDirectory = () => loadEmployeeDirectory();
+
+        window.deleteUser = async (email) => {
+            showCustomConfirm(`Delete ${email}?`, async () => {
+                try { await deleteDoc(doc(db, "users", email)); showToast("Deleted.", "success"); loadEmployeeDirectory(); } 
+                catch(e) { showToast("Error: " + e.message, "error"); }
+            });
+        };
+
+        // ==========================================
+        // SUBMIT
+        // ==========================================
+        async function sendToSheet(sheetName, dataArray, actionDescription) {
+            const statusDiv = document.getElementById('global-status');
+            statusDiv.innerText = "Saving..."; statusDiv.classList.remove('hidden');
+            const payloadData = [auth.currentUser.email, ...dataArray];
+            try {
+                await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sheetName: sheetName, payload: payloadData }) });
+                await logSystemAction(actionDescription);
+                setTimeout(() => { showToast(`${actionDescription} saved.`, "success"); statusDiv.classList.add('hidden'); }, 800);
+                return true;
+            } catch (error) { showToast("Network error.", "error"); statusDiv.classList.add('hidden'); return false; }
+        }
+
+        // --- PASSWORD UPDATE ---
+        window.handlePasswordChange = async (e) => {
+            e.preventDefault();
+            const newPass = document.getElementById('new-password').value;
+            const confirmPass = document.getElementById('confirm-password').value;
+            if (newPass.length < 6) return showToast("Password too short", "error");
+            if (newPass !== confirmPass) return showToast("Passwords don't match", "error");
+
+            try {
+                const btn = document.getElementById('pwd-btn'); btn.disabled = true; btn.innerText = "Updating...";
+                await updatePassword(auth.currentUser, newPass);
+                showCredentialsModal(auth.currentUser.email, newPass); 
+                document.getElementById('password-form').reset();
+                logSystemAction("User changed password");
+            } catch (error) {
+                if (error.code === 'auth/requires-recent-login') showToast("Please logout and login again.", "error");
+                else showToast("Error: " + error.message, "error");
+            } finally { document.getElementById('pwd-btn').disabled = false; document.getElementById('pwd-btn').innerText = "Update Password"; }
+        };
+
+        // --- ENROLL ---
+        window.enrollUser = async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('enroll-email').value.toLowerCase().trim();
+            const name = document.getElementById('enroll-name').value.trim();
+            const position = document.getElementById('enroll-position').value.trim();
+            const password = document.getElementById('enroll-password').value;
+            const role = document.getElementById('enroll-role').value;
+            if (password.length < 6) return showToast("Password too short.", "error");
+
+            try {
+                const btn = document.getElementById('enroll-btn'); btn.disabled = true; btn.innerText = "Creating...";
+                await setDoc(doc(db, "users", email), { displayName: name, position: position, role: role, enrolledAt: serverTimestamp(), enrolledBy: auth.currentUser.email });
+                const secondaryApp = initializeApp(firebaseConfig, "Secondary");
+                const secondaryAuth = getAuth(secondaryApp);
+                await createUserWithEmailAndPassword(secondaryAuth, email, password);
+                await signOut(secondaryAuth); deleteApp(secondaryApp);
+                
+                showCredentialsModal(email, password); 
+                logSystemAction(`Enrolled new ${role}: ${name}`);
+                document.getElementById('enroll-form').reset();
+                loadEmployeeDirectory(); 
+            } catch (error) {
+                if (error.code === 'auth/email-already-in-use') showToast("Email taken.", "error");
+                else showToast("Error: " + error.message, "error");
+            } finally { document.getElementById('enroll-btn').disabled = false; document.getElementById('enroll-btn').innerText = "Enroll User"; }
+        };
+
+        // --- FORMS ---
+        window.submitLessonPlan = async () => {
+            const subject = document.getElementById('lesson-subject').value;
+            const objective = document.getElementById('lesson-objective').value;
+            const materials = document.getElementById('lesson-materials').value;
+            const instruction = document.getElementById('lesson-instruction').value;
+            const guided = document.getElementById('lesson-guided').value;
+            const closure = document.getElementById('lesson-closure').value;
+            const assessment = document.getElementById('lesson-assessment').value;
+
+            if(!subject || !objective) return showToast("Subject & Objective required", "error");
+            
+            const dataPayload = [subject, objective, materials, instruction, guided, closure, assessment];
+            const sheetSuccess = await sendToSheet("Archive_Lessons", dataPayload, `Lesson Plan: ${subject}`);
+            
+            if (sheetSuccess) {
+                try {
+                    await addDoc(collection(db, "lesson_plans"), {
+                        teacherEmail: auth.currentUser.email,
+                        subject: subject, objective: objective, materials: materials,
+                        instruction: instruction, guided: guided, closure: closure, assessment: assessment,
+                        status: "Pending", 
+                        timestamp: serverTimestamp()
+                    });
+                    // Refresh handled by listener
+                } catch(e) { console.error(e); }
+                document.getElementById('lesson-subject').value = ""; document.getElementById('lesson-objective').value = ""; document.getElementById('lesson-materials').value = ""; document.getElementById('lesson-instruction').value = ""; document.getElementById('lesson-guided').value = ""; document.getElementById('lesson-closure').value = ""; document.getElementById('lesson-assessment').value = "";
+            }
+        };
+
+        window.checkMaintType = (select) => {
+            if(select.value === 'Others') {
+                const parent = select.parentElement;
+                parent.innerHTML = '<input type="text" id="maint-type" class="w-full border p-2 mb-4 rounded" placeholder="Specify issue..." autofocus>';
+            }
+        };
+
+        window.submitMaintenance = async () => {
+            const loc = document.getElementById('maint-location').value;
+            const typeEl = document.getElementById('maint-type');
+            const type = typeEl.value;
+            if(!loc) return showToast("Enter location", "error");
+            if(await sendToSheet("Archive_Ops", ["Maint", loc, type], `Maintenance Req: ${loc}`)) {
+                try { 
+                    await addDoc(collection(db, "operations_requests"), { type: "Maintenance", location: loc, issue: type, status: "Open", submittedBy: auth.currentUser.email, timestamp: serverTimestamp() }); 
+                } catch(e){}
+                document.getElementById('maint-location').value = "";
+            }
+        };
+
+        window.submitCheckout = async () => {
+            const item = document.getElementById('checkout-item').value;
+            const borrower = document.getElementById('checkout-borrower').value;
+            const purpose = document.getElementById('checkout-purpose').value;
+            if(!item || !borrower) return showToast("Item and Borrower required", "error");
+            if(await sendToSheet("Archive_Ops", ["Checkout", item, borrower, purpose], `Checked out: ${item} to ${borrower}`)) {
+                try { 
+                    await addDoc(collection(db, "operations_requests"), { type: "Checkout", item: item, borrower: borrower, purpose: purpose, status: "Checked Out", submittedBy: auth.currentUser.email, timestamp: serverTimestamp() }); 
+                } catch(e){}
+                document.getElementById('checkout-item').value = "";
+                document.getElementById('checkout-borrower').value = "";
+                document.getElementById('checkout-purpose').value = "";
+            }
+        };
+
+        window.submitVisitor = async () => {
+            const name = document.getElementById('visitor-name').value;
+            const purp = document.getElementById('visitor-purpose').value;
+            if(!name) return showToast("Enter name", "error");
+            if(await sendToSheet("Archive_Visitors", [name, purp], `Visitor: ${name}`)) {
+                try { 
+                    await addDoc(collection(db, "visitor_logs"), { name: name, purpose: purp, status: "In", submittedBy: auth.currentUser.email, timestamp: serverTimestamp() }); 
+                } catch(e){}
+                document.getElementById('visitor-name').value = ""; document.getElementById('visitor-purpose').value = "";
+            }
+        };
+
+        window.submitIncident = async () => {
+            const det = document.getElementById('incident-details').value;
+            if(!det) return showToast("Enter details", "error");
+            if(await sendToSheet("Archive_Safety", ["INCIDENT", det], "Incident Report")) {
+                try { await addDoc(collection(db, "safety_logs"), { type: "Incident", details: det, submittedBy: auth.currentUser.email, timestamp: serverTimestamp() }); } catch(e){}
+                document.getElementById('incident-details').value = "";
+            }
+        };
+
+        window.submitClinic = async () => {
+            const stu = document.getElementById('clinic-student').value;
+            const sym = document.getElementById('clinic-symptoms').value;
+            const act = document.getElementById('clinic-action').value;
+            if(!stu) return showToast("Enter student", "error");
+            if(await sendToSheet("Archive_Health", [stu, sym, act], `Clinic: ${stu}`)) {
+                try { 
+                    await addDoc(collection(db, "health_logs"), { student: stu, symptoms: sym, action: act, status: "Admitted", submittedBy: auth.currentUser.email, timestamp: serverTimestamp() }); 
+                } catch(e){}
+                document.getElementById('clinic-student').value = ""; 
+                document.getElementById('clinic-symptoms').value = "";
+                document.getElementById('clinic-action').value = "";
+            }
+        };
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans h-screen overflow-hidden">
+
+    <!-- CREDENTIALS MODAL -->
+    <div id="credentials-modal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-[80]">
+        <div class="bg-white p-8 rounded-lg shadow-2xl w-96 border-4 border-red-500">
+            <h3 class="font-bold text-2xl mb-4 text-red-600">⚠️ SAVE THIS NOW</h3>
+            <p class="text-sm text-gray-700 mb-4 font-bold">The credentials below are shown ONLY ONCE. If you lose them, the account cannot be accessed.</p>
+            <div class="bg-gray-100 p-4 rounded mb-6 font-mono text-sm border border-gray-300">
+                <p><strong>Email:</strong> <span id="cred-email" class="select-all"></span></p>
+                <p class="mt-2"><strong>Password:</strong> <span id="cred-password" class="bg-yellow-200 px-1 select-all"></span></p>
+            </div>
+            <p class="text-xs text-gray-500 mb-6">Tip: Write this down privately or send a secure message to yourself immediately.</p>
+            <button onclick="closeCredentialsModal()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded">I HAVE SAVED THEM</button>
+        </div>
+    </div>
+
+    <!-- LESSON PLAN MODAL -->
+    <div id="lesson-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-[70] p-4">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-3xl h-[85vh] flex flex-col">
+            <div class="flex justify-between items-center mb-4 border-b pb-2">
+                <h3 class="font-bold text-xl text-gray-800">Lesson Plan Details</h3>
+                <div class="flex items-center gap-2"><span id="view-status" class="text-sm"></span><button onclick="closeLessonModal()" class="text-gray-500 hover:text-red-500 text-2xl px-2">&times;</button></div>
+            </div>
+            <div class="flex-1 overflow-y-auto space-y-4 pr-2 no-scrollbar">
+                <div class="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded border">
+                    <div><span class="block text-xs font-bold text-gray-500">SUBJECT</span><input id="view-subject" class="lesson-input w-full bg-transparent border-0 font-bold text-gray-800" disabled></div>
+                    <div><span class="block text-xs font-bold text-gray-500">TEACHER</span><span id="view-teacher"></span></div>
+                    <div><span class="block text-xs font-bold text-gray-500">DATE</span><span id="view-date"></span></div>
+                </div>
+                
+                <div id="admin-review-section" class="bg-blue-50 p-4 rounded border border-blue-200 hidden"><h4 class="font-bold text-blue-800 mb-2">Admin Review & Action</h4><textarea id="admin-feedback-input" class="w-full border p-2 rounded mb-2 h-20 text-sm" placeholder="Provide comments..."></textarea><div class="flex gap-2 justify-end"><button onclick="submitLessonReview('Revision Needed')" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded text-sm">Request Revision</button><button onclick="submitLessonReview('Approved')" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm font-bold">Approve Plan</button></div></div>
+                <div id="teacher-feedback-view" class="bg-yellow-50 p-4 rounded border border-yellow-200 hidden"><h4 class="font-bold text-yellow-800 mb-1">Principal's Feedback:</h4><p id="teacher-feedback-text" class="text-sm text-gray-800 italic"></p></div>
+                
+                <div class="space-y-4">
+                    <div><h4 class="font-bold border-b text-sm text-gray-600">Objective</h4><textarea id="view-objective" class="lesson-input w-full bg-transparent border-0 text-sm mt-1 h-20" disabled></textarea></div>
+                    <div><h4 class="font-bold border-b text-sm text-gray-600">Materials</h4><textarea id="view-materials" class="lesson-input w-full bg-transparent border-0 text-sm mt-1 h-12" disabled></textarea></div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div><h4 class="font-bold border-b text-sm text-gray-600">Direct Instruction</h4><textarea id="view-instruction" class="lesson-input w-full bg-transparent border-0 text-sm mt-1 h-32" disabled></textarea></div>
+                        <div><h4 class="font-bold border-b text-sm text-gray-600">Guided Teaching</h4><textarea id="view-guided" class="lesson-input w-full bg-transparent border-0 text-sm mt-1 h-32" disabled></textarea></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div><h4 class="font-bold border-b text-sm text-gray-600">Closure</h4><textarea id="view-closure" class="lesson-input w-full bg-transparent border-0 text-sm mt-1 h-20" disabled></textarea></div>
+                        <div><h4 class="font-bold border-b text-sm text-gray-600">Assessment</h4><textarea id="view-assessment" class="lesson-input w-full bg-transparent border-0 text-sm mt-1 h-20" disabled></textarea></div>
+                    </div>
+                </div>
+            </div>
+            <div id="lesson-resubmit-btn" class="hidden border-t pt-4 mt-2">
+                <button onclick="resubmitLessonPlan()" class="w-full bg-green-600 text-white py-2 rounded font-bold hover:bg-green-700">Resubmit Lesson Plan</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- REPORT MODAL -->
+    <div id="report-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-[70] p-4">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-5xl h-[80vh] flex flex-col">
+            <div class="flex justify-between items-center mb-4 border-b pb-2"><h3 id="report-title" class="font-bold text-lg text-gray-800">Report View</h3><button onclick="closeReportModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button></div>
+            <div id="report-content" class="flex-1 overflow-y-auto no-scrollbar"></div>
+        </div>
+    </div>
+
+    <!-- CONFIRM MODAL -->
+    <div id="confirm-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-[90]">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-80 text-center"><h3 class="font-bold text-lg mb-2">Confirm Action</h3><p id="confirm-message" class="text-gray-600 mb-6">Are you sure?</p><div class="flex justify-center gap-4"><button onclick="closeConfirm()" class="px-4 py-2 border rounded hover:bg-gray-100 text-sm">Cancel</button><button id="confirm-yes-btn" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm font-bold">Confirm</button></div></div>
+    </div>
+
+    <!-- EDIT USER MODAL -->
+    <div id="edit-user-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-[70]">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-96"><h3 class="font-bold text-lg mb-4 text-gray-800">Edit Employee</h3><p class="text-sm text-gray-500 mb-4">Updating: <span id="edit-email-display" class="font-mono"></span></p><div class="space-y-4"><div><label class="block text-sm font-bold text-gray-700 mb-1">Full Name</label><input type="text" id="edit-name" class="w-full border p-2 rounded"></div><div><label class="block text-sm font-bold text-gray-700 mb-1">Role</label><select id="edit-role" class="w-full border p-2 rounded"><option value="teacher">Teacher</option><option value="staff">Staff / Ops</option><option value="security">Security</option><option value="nurse">Nurse</option><option value="principal">Principal</option><option value="assistant_principal">Assistant Principal</option></select></div></div><div class="flex justify-end gap-2 mt-6"><button onclick="closeEditModal()" class="px-4 py-2 border rounded hover:bg-gray-100 text-sm">Cancel</button><button onclick="saveUserEdit()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-bold">Save Changes</button></div></div>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-[100] flex flex-col gap-2"></div>
+
+    <!-- GLOBAL STATUS BAR -->
+    <div id="global-status" class="fixed top-0 left-0 w-full bg-blue-600 text-white text-center py-1 hidden z-50">System Status: Active</div>
+
+    <!-- VIEW 1: LOGIN -->
+    <div id="login-view" class="flex items-center justify-center h-full bg-slate-800">
+        <div class="bg-white p-8 rounded-lg shadow-xl w-96">
+            <h2 class="text-2xl font-bold mb-6 text-center text-slate-800">CampusFlow Login</h2>
+            <form onsubmit="handleLogin(event)">
+                <div class="mb-4"><label class="block text-sm font-bold mb-2">Email</label><input type="email" id="email" class="w-full p-2 border rounded" required></div>
+                <div class="mb-6"><label class="block text-sm font-bold mb-2">Password</label><input type="password" id="password" class="w-full p-2 border rounded" required></div>
+                <button type="submit" id="login-btn" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700">Login</button>
+                <div id="login-error" class="text-red-500 text-sm mt-4 text-center"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- VIEW 2: DASHBOARD -->
+    <div id="dashboard-view" class="hidden flex h-full">
+        <div class="w-64 bg-slate-900 text-white flex flex-col">
+            <div class="p-6 text-xl font-bold border-b border-slate-700">CampusFlow</div>
+            <nav class="flex-1 p-4 space-y-2 overflow-y-auto no-scrollbar">
+                <button onclick="switchModule('module-academics', 'nav-academics')" id="nav-academics" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden">📚 Academics</button>
+                <button onclick="switchModule('module-ops', 'nav-ops')" id="nav-ops" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden">🔧 Operations</button>
+                <button onclick="switchModule('module-safety', 'nav-safety')" id="nav-safety" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden">🛡️ Safety & Gate</button>
+                <button onclick="switchModule('module-health', 'nav-health')" id="nav-health" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden">🏥 Health & HR</button>
+                <button onclick="switchModule('module-admin', 'nav-admin')" id="nav-admin" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden">🔑 Admin Panel</button>
+                <button onclick="switchModule('module-students', 'nav-students')" id="nav-students" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden">🎓 Student Registry</button>
+                <button onclick="switchModule('module-settings', 'nav-profile')" id="nav-profile" class="w-full text-left p-3 hover:bg-slate-800 rounded hidden border-t border-slate-700 mt-4 pt-4">👤 My Profile</button>
+            </nav>
+            <div class="p-4 border-t border-slate-700">
+                <div class="text-xs text-slate-400">Logged in as:</div>
+                <div id="user-email-display" class="font-bold truncate">...</div>
+                <div id="user-role-display" class="text-xs text-blue-400 mb-2">...</div>
+                <button onclick="handleLogout()" class="w-full bg-red-600 text-white text-sm p-1 rounded">Logout</button>
+            </div>
+        </div>
+
+        <div class="flex-1 bg-gray-100 flex flex-col relative">
+            <div id="top-bar" class="bg-white shadow p-4 flex justify-between items-center relative z-20 transition-colors duration-500">
+                <h1 class="text-xl font-bold">Dashboard</h1>
+                <div class="flex items-center gap-4">
+                     <div class="relative">
+                        <button id="notif-bell-btn" onclick="toggleNotifications()" class="p-2 hover:opacity-75 focus:outline-none">🔔</button>
+                        <div id="notification-panel" class="hidden absolute right-0 mt-2 w-80 bg-white border rounded shadow-xl p-0 text-sm text-gray-700 overflow-hidden z-50">
+                            <div class="bg-gray-50 p-2 font-bold border-b flex justify-between items-center">
+                                <span>Global Activity Feed</span><button onclick="toggleNotifications()" class="text-xs text-gray-400 hover:text-red-500">✕</button>
+                            </div>
+                            <div id="notification-list" class="max-h-64 overflow-y-auto p-2 no-scrollbar"></div>
+                        </div>
+                     </div>
+                </div>
+            </div>
+
+            <div class="p-8 overflow-y-auto z-10 h-full no-scrollbar">
+                <!-- 0. WELCOME -->
+                <div id="welcome-module" class="content-module"><h2 class="text-3xl font-bold text-gray-800">Welcome back.</h2><p class="text-gray-600 mt-2">Select a module from the left to begin.</p></div>
+
+                <!-- 1. ACADEMICS -->
+                <div id="module-academics" class="content-module hidden">
+                    <div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-bold">Academics</h2><span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span></div>
+                    <div class="employee-view">
+                        <div class="flex gap-6">
+                            <div class="flex-1 bg-white p-6 rounded shadow">
+                                <h3 class="font-bold mb-4 text-lg border-b pb-2">Digital Lesson Planner</h3>
+                                <div class="grid grid-cols-2 gap-4 mb-4">
+                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Subject / Topic</label><input type="text" id="lesson-subject" class="w-full border p-2 rounded" placeholder="e.g. Science - Photosynthesis"></div>
+                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Materials Needed</label><input type="text" id="lesson-materials" class="w-full border p-2 rounded" placeholder="e.g. Projector, Lab Kits, Worksheets"></div>
+                                </div>
+                                <label class="block mb-1 font-bold text-sm text-gray-600">Lesson Objectives</label><textarea id="lesson-objective" class="w-full border p-2 mb-4 rounded h-20" placeholder="What will students learn?"></textarea>
+                                <div class="grid grid-cols-2 gap-4 mb-4">
+                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Direct Instruction (I Do)</label><textarea id="lesson-instruction" class="w-full border p-2 rounded h-32" placeholder="Teacher input & modeling..."></textarea></div>
+                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Guided Teaching (We Do)</label><textarea id="lesson-guided" class="w-full border p-2 rounded h-32" placeholder="Group practice & scaffolding..."></textarea></div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-4 mb-4">
+                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Closure (You Do)</label><textarea id="lesson-closure" class="w-full border p-2 rounded h-20" placeholder="Independent practice & wrap-up..."></textarea></div>
+                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Assessment</label><textarea id="lesson-assessment" class="w-full border p-2 rounded h-20" placeholder="Exit ticket or quiz..."></textarea></div>
+                                </div>
+                                <button onclick="submitLessonPlan()" class="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 transition w-full font-bold">Submit Lesson Plan</button>
+                            </div>
+                            <div class="w-80 bg-white p-4 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">My Lesson Plans (This Week)</h3><div id="lesson-history-list" class="space-y-3"><p class="text-gray-400 italic text-sm">Loading...</p></div></div>
+                        </div>
+                    </div>
+                    <div class="admin-view hidden space-y-6">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div class="bg-white p-6 rounded shadow border-l-4 border-blue-500"><h3 class="font-bold text-gray-500 text-xs uppercase">Lesson Plans This Week</h3><div id="stat-lessons-today" class="text-3xl font-bold text-gray-800 mt-1">--</div><div class="text-xs text-gray-400">Since Sunday</div></div>
+                            <div class="bg-white p-6 rounded shadow border-l-4 border-purple-500"><h3 class="font-bold text-gray-500 text-xs uppercase">Quick Links</h3><div class="mt-2 space-y-1"><button onclick="openReportModal('Lesson Plans')" class="text-blue-500 hover:underline text-sm block">📄 View All Lesson Plans</button></div></div>
+                        </div>
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-lg mb-4 border-b pb-2 text-yellow-700">Pending Reviews</h3><div id="admin-pending-lessons" class="space-y-2"><p class="text-gray-400 italic text-sm">Loading...</p></div></div>
+                            <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-lg mb-4 border-b pb-2 text-green-700">Approved Plans</h3><div id="admin-approved-lessons" class="space-y-2"><p class="text-gray-400 italic text-sm">Loading...</p></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. OPERATIONS -->
+                <div id="module-ops" class="content-module hidden">
+                    <div class="flex justify-between items-center mb-4">
+                        <div class="flex items-center gap-2"><h2 class="text-2xl font-bold">Operations & Maintenance</h2></div>
+                        <span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span>
+                    </div>
+                    <div class="employee-view grid grid-cols-2 gap-6">
+                        <div class="space-y-6">
+                            <div class="bg-white p-6 rounded shadow">
+                                <h3 class="font-bold mb-4 text-lg">Report Maintenance Issue</h3>
+                                <input type="text" id="maint-location" placeholder="Location (e.g. Room 102)" class="w-full border p-2 mb-2 rounded">
+                                <div id="maint-type-container">
+                                    <select id="maint-type" class="w-full border p-2 mb-4 rounded" onchange="checkMaintType(this)"><option>Plumbing</option><option>Electrical</option><option>Furniture</option><option>HVAC</option><option>Others</option></select>
+                                </div>
+                                <button onclick="submitMaintenance()" class="bg-blue-600 text-white px-4 py-2 rounded w-full hover:bg-blue-700">Submit Request</button>
+                            </div>
+                            <div class="bg-white p-6 rounded shadow">
+                                <h3 class="font-bold mb-4 text-lg">Equipment Checkout</h3>
+                                <input type="text" id="checkout-item" placeholder="Item Name" class="w-full border p-2 mb-2 rounded">
+                                <input type="text" id="checkout-borrower" list="borrower-list" placeholder="Select Borrower..." class="w-full border p-2 mb-2 rounded">
+                                <datalist id="borrower-list"></datalist>
+                                <input type="text" id="checkout-purpose" placeholder="Purpose of use" class="w-full border p-2 mb-2 rounded">
+                                <button onclick="submitCheckout()" class="bg-slate-600 text-white px-4 py-2 rounded w-full hover:bg-slate-700">Log Checkout</button>
+                            </div>
+                        </div>
+                        <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Active Tasks (Open/Checked Out)</h3><div id="ops-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div></div>
+                    </div>
+                    <div class="admin-view hidden space-y-6">
+                        <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-lg mb-4 text-blue-800">Live Operations Monitor (Active)</h3><div id="admin-live-ops" class="space-y-2 grid grid-cols-1 md:grid-cols-2 gap-2">Loading...</div></div>
+                        <div class="grid grid-cols-3 gap-6"><div class="bg-white p-4 rounded shadow"><div class="text-gray-500 text-xs uppercase font-bold">Open Work Orders</div><div id="stat-open-work-orders" class="text-3xl font-bold text-orange-500">--</div></div></div>
+                        <div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg mb-4">Operations Overview</h3><button onclick="openHistoryModal('Operations')" class="bg-gray-100 text-gray-700 px-4 py-2 rounded border hover:bg-gray-200">📂 View All Logs</button></div>
+                    </div>
+                </div>
+
+                <!-- 3. SAFETY -->
+                <div id="module-safety" class="content-module hidden">
+                    <div class="flex justify-between items-center mb-4">
+                        <div class="flex items-center gap-2"><h2 class="text-2xl font-bold">Safety & Visitor Log</h2></div>
+                        <span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span>
+                    </div>
+                    <div id="teacher-safety-view" class="hidden mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded text-center text-yellow-800 text-sm">Visitor logging is restricted to Security personnel. You may only view active reports.</div>
+                    <div id="visitor-entry-form" class="employee-view">
+                        <div id="security-monitor-view" class="mb-6"><div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg text-green-700 mb-4 flex items-center gap-2">🟢 Live Visitor Monitor <span class="text-xs font-normal text-gray-500 ml-2">(Currently On Campus)</span></h3><div id="visitor-monitor-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div></div></div>
+                        
+                        <div id="visitor-entry-section" class="bg-white p-6 rounded shadow mb-6 relative">
+                            <h3 class="font-bold text-lg mb-2">New Visitor Entry</h3>
+                            <div class="flex gap-4"><input type="text" id="visitor-name" placeholder="Visitor Name" class="flex-1 border p-2 rounded"><input type="text" id="visitor-purpose" placeholder="Purpose" class="flex-1 border p-2 rounded"><button onclick="submitVisitor()" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">Log Entry</button></div>
+                        </div>
+                        
+                        <div class="bg-red-50 p-6 rounded shadow border border-red-100"><h3 class="font-bold text-lg mb-2 text-red-700">Incident Report Logger</h3><textarea id="incident-details" placeholder="Describe incident details..." class="w-full border p-2 mb-2 rounded h-24"></textarea><button onclick="submitIncident()" class="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700">Submit Incident Report</button></div>
+                    </div>
+                    <div class="admin-view hidden">
+                        <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-lg mb-4 text-green-700">Active Visitors (Live)</h3><div id="admin-live-visitors" class="grid grid-cols-2 gap-2">Loading...</div></div>
+                        <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-gray-700 mb-4">Campus Safety Status</h3><div class="grid grid-cols-2 gap-4"><div class="bg-green-50 border border-green-200 p-4 rounded text-center"><span class="block text-2xl font-bold text-green-700 text-sm">NORMAL</span><span class="text-xs text-green-600">Current Status</span></div><div class="bg-gray-50 border border-gray-200 p-4 rounded text-center"><span id="stat-visitors-today" class="block text-2xl font-bold text-gray-700">--</span><span class="text-xs text-gray-500">Visitors Today</span></div></div></div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <button onclick="openHistoryModal('Visitors')" class="bg-white border border-gray-300 text-gray-700 p-3 rounded hover:bg-gray-50 flex justify-between items-center mb-4"><span>📄 View Visitor Logs</span><span>→</span></button>
+                            <button onclick="openHistoryModal('Incidents')" class="bg-red-50 border border-red-200 text-red-700 p-3 rounded hover:bg-red-100 flex justify-between items-center mb-4 font-bold"><span>🚨 Incident Reports</span><span>→</span></button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. HEALTH -->
+                <div id="module-health" class="content-module hidden">
+                    <div class="flex justify-between items-center mb-4">
+                        <div class="flex items-center gap-2"><h2 class="text-2xl font-bold">Clinic & HR</h2></div>
+                        <span class="admin-view hidden bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">MANAGEMENT VIEW</span>
+                    </div>
+                    <div class="employee-view grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-white p-6 rounded shadow h-fit">
+                            <h3 class="font-bold mb-2">Clinic Visit Log</h3>
+                            <input type="text" id="clinic-student" list="clinic-student-list" placeholder="Student Name (Type to search)" class="w-full border p-2 mb-2 rounded">
+                            <datalist id="clinic-student-list"></datalist>
+                            <input type="text" id="clinic-symptoms" placeholder="Symptoms" class="w-full border p-2 mb-2 rounded">
+                            <input type="text" id="clinic-action" placeholder="Action Taken" class="w-full border p-2 mb-4 rounded">
+                            <button onclick="submitClinic()" class="bg-red-500 text-white px-6 py-2 rounded hover:bg-red-600">Log Visit</button>
+                        </div>
+                        <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Currently Admitted</h3><div id="clinic-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div></div>
+                    </div>
+                    <div class="admin-view hidden">
+                        <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-lg mb-4 text-red-700">Currently Admitted Students</h3><div id="admin-live-clinic" class="space-y-2">Loading...</div></div>
+                        <div class="bg-white p-6 rounded shadow">
+                            <h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Health History (Completed/Closed)</h3>
+                            <div id="admin-health-history-list" class="max-h-[300px] overflow-y-auto no-scrollbar"><p class="text-gray-400 italic">Loading history...</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. ADMIN PANEL -->
+                <div id="module-admin" class="content-module hidden">
+                    <h2 class="text-2xl font-bold mb-4 text-yellow-600">Admin Console</h2>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div class="bg-white p-6 rounded shadow border-l-4 border-yellow-500 h-fit">
+                            <h3 class="font-bold text-lg mb-4">Enroll New Staff/User</h3>
+                            <form id="enroll-form" onsubmit="enrollUser(event)">
+                                <div class="flex flex-col gap-4 mb-4">
+                                    <input id="enroll-email" type="email" placeholder="Email Address" class="border p-2 rounded" required>
+                                    <input id="enroll-name" type="text" placeholder="Full Name" class="border p-2 rounded" required>
+                                    <input id="enroll-position" type="text" placeholder="Position/Title (e.g. Head Security)" class="border p-2 rounded" required>
+                                    <input id="enroll-password" type="text" placeholder="Set Password" class="border p-2 rounded" required>
+                                    <select id="enroll-role" class="border p-2 rounded"><option value="teacher">Teacher</option><option value="staff">Staff / Ops</option><option value="security">Security</option><option value="nurse">Nurse</option><option value="principal">Principal</option><option value="assistant_principal">Assistant Principal</option></select>
+                                </div>
+                                <button type="submit" id="enroll-btn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-2 rounded font-bold w-full">Enroll User</button>
+                            </form>
+                        </div>
+                        <div class="bg-white p-6 rounded shadow h-full">
+                            <div class="flex justify-between items-center mb-4"><h3 class="font-bold text-lg">Staff Directory</h3><button onclick="refreshDirectory()" class="text-xs text-blue-500 hover:underline">Refresh</button></div>
+                            <div id="employee-list-container" class="max-h-[500px] overflow-y-auto pr-2 no-scrollbar"><p class="text-gray-400 italic text-sm">Loading...</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6. STUDENT REGISTRY -->
+                <div id="module-students" class="content-module hidden">
+                    <h2 class="text-2xl font-bold mb-4 text-gray-700">Student Registry</h2>
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div class="bg-white p-6 rounded shadow h-fit lg:col-span-1">
+                            <h3 class="font-bold text-lg mb-4">Batch Import</h3>
+                            <p class="text-xs text-gray-500 mb-2">Format per line: ID, Name, Grade, Section</p>
+                            <textarea id="student-batch-input" class="w-full border p-2 rounded h-40 text-sm mb-2" placeholder="2024001, John Doe, 10, Rizal&#10;2024002, Jane Smith, 11, Aguinaldo"></textarea>
+                            <div class="flex gap-2 mb-2">
+                                <label class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-center py-2 rounded text-sm cursor-pointer">
+                                    📂 Import CSV
+                                    <input type="file" class="hidden" accept=".csv" onchange="handleCSVUpload(this)">
+                                </label>
+                                <button onclick="batchAddStudents()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded text-sm font-bold">Add Students</button>
+                            </div>
+                        </div>
+                        <div class="bg-white p-6 rounded shadow lg:col-span-2">
+                             <div class="flex justify-between items-center mb-4"><h3 class="font-bold text-lg">Registered Students</h3><span class="text-xs text-gray-400">Showing last 100</span></div>
+                             <div id="student-list-container" class="overflow-y-auto max-h-[600px] no-scrollbar"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 7. PROFILE -->
+                <div id="module-settings" class="content-module hidden">
+                    <h2 class="text-2xl font-bold mb-4">My Profile</h2>
+                    <div class="bg-white p-6 rounded shadow max-w-md">
+                        <h3 class="font-bold mb-4 text-lg">Change Password</h3>
+                        <p class="text-sm text-gray-500 mb-4">Enter a new password. Credentials must be saved immediately.</p>
+                        <form id="password-form" onsubmit="handlePasswordChange(event)">
+                            <label class="block mb-2 font-bold text-sm text-gray-600">New Password</label><input type="password" id="new-password" class="w-full border p-2 mb-4 rounded" required minlength="6">
+                            <label class="block mb-2 font-bold text-sm text-gray-600">Confirm New Password</label><input type="password" id="confirm-password" class="w-full border p-2 mb-4 rounded" required minlength="6">
+                            <button type="submit" id="pwd-btn" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 w-full font-bold">Update Password</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
