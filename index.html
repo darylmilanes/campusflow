@@ -6,6 +6,8 @@
     <title>CampusFlow Command Center</title>
     <!-- 1. Tailwind CSS (Styling) -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 2. jsPDF for PDF Generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         /* Hide scrollbar for Chrome, Safari and Opera */
         .no-scrollbar::-webkit-scrollbar {
@@ -26,10 +28,10 @@
         }
     </style>
     
-    <!-- 2. Firebase SDKs -->
+    <!-- 3. Firebase SDKs -->
     <script type="module">
         import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, signOut, updatePassword, createUserWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, signOut, updatePassword, createUserWithEmailAndPassword, onAuthStateChanged, reauthenticateWithCredential, EmailAuthProvider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, collection, query, where, orderBy, limit, getDocs, onSnapshot, serverTimestamp, Timestamp, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
         // ==========================================
@@ -65,7 +67,8 @@
 
         window.formatTimestamp = (ts) => {
             if (!ts) return '-';
-            const date = ts.toDate();
+            // If it's a string (from input type date), convert it
+            const date = ts instanceof Timestamp ? ts.toDate() : new Date(ts);
             const datePart = date.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: '2-digit' });
             const timePart = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
             return `${datePart} ${timePart}`;
@@ -120,24 +123,71 @@
             activeListeners = [];
         }
 
+        // --- SMART TEXTAREA HANDLER ---
+        document.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'TEXTAREA' || (e.target.tagName === 'INPUT' && e.target.type === 'text')) {
+                // Formatting Shortcuts
+                if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'i')) {
+                    e.preventDefault();
+                    const start = e.target.selectionStart;
+                    const end = e.target.selectionEnd;
+                    const text = e.target.value;
+                    const char = e.key === 'b' ? '**' : '_'; // Markdown style
+                    e.target.value = text.substring(0, start) + char + text.substring(start, end) + char + text.substring(end);
+                    e.target.selectionStart = start + char.length;
+                    e.target.selectionEnd = end + char.length;
+                }
+                
+                // Auto-List Indent (Textarea only)
+                if (e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
+                    const cursor = e.target.selectionStart;
+                    const text = e.target.value;
+                    const currentLineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+                    const currentLine = text.substring(currentLineStart, cursor);
+                    const match = currentLine.match(/^(\s*)([-*]|\d+\.)\s/);
+                    
+                    if (match) {
+                        // Check if empty list item (just the bullet/number)
+                        if (currentLine.trim() === match[0].trim()) {
+                            e.preventDefault();
+                            // Remove the bullet from current line
+                            e.target.value = text.substring(0, currentLineStart) + text.substring(cursor);
+                            e.target.selectionStart = e.target.selectionEnd = currentLineStart; 
+                            return;
+                        }
+
+                        e.preventDefault(); 
+                        const indent = match[1];
+                        let marker = match[2];
+                        
+                        // Increment number if it's a numbered list
+                        if (/\d+\./.test(marker)) {
+                            const num = parseInt(marker) + 1;
+                            marker = num + '.';
+                        }
+                        
+                        const insertion = `\n${indent}${marker} `;
+                        e.target.value = text.substring(0, cursor) + insertion + text.substring(cursor);
+                        e.target.selectionStart = e.target.selectionEnd = cursor + insertion.length;
+                    }
+                }
+            }
+        });
+
         // --- MOBILE NAV TOGGLE ---
         window.toggleSidebar = () => {
             const sidebar = document.getElementById('main-sidebar');
             const overlay = document.getElementById('sidebar-overlay');
             if (sidebar.classList.contains('-translate-x-full')) {
-                // Open
                 sidebar.classList.remove('-translate-x-full');
                 overlay.classList.remove('hidden');
             } else {
-                // Close
                 sidebar.classList.add('-translate-x-full');
                 overlay.classList.add('hidden');
             }
         };
 
         // --- NOTIFICATIONS ---
-        
-        // Click outside to close
         document.addEventListener('click', (e) => {
             const panel = document.getElementById('notification-panel');
             const btn = document.getElementById('notif-bell-btn');
@@ -225,10 +275,14 @@
         window.updateDocStatus = async (collectionName, docId, newStatus, actionName) => {
             showCustomConfirm(`Mark as ${newStatus}?`, async () => {
                 try {
-                    await updateDoc(doc(db, collectionName, docId), {
+                    const updateData = {
                         status: newStatus,
                         updatedAt: serverTimestamp()
-                    });
+                    };
+                    if (collectionName === 'operations_requests' && (newStatus === 'Done' || newStatus === 'Closed' || newStatus === 'Returned')) {
+                        updateData.closedBy = auth.currentUser.email;
+                    }
+                    await updateDoc(doc(db, collectionName, docId), updateData);
                     showToast(`${actionName} successful`, "success");
                     logSystemAction(`Updated status: ${actionName} (${newStatus})`); 
                 } catch(e) { showToast("Error: " + e.message, "error"); }
@@ -251,13 +305,19 @@
             });
 
             document.getElementById('view-teacher').innerText = (data.teacherEmail || "").split('@')[0];
-            document.getElementById('view-date').innerText = window.formatTimestamp(data.timestamp);
+            // Populate schedule input
+            const scheduleInput = document.getElementById('view-schedule');
+            if (scheduleInput) {
+                scheduleInput.value = data.implementationDate || "";
+            }
+
             document.getElementById('view-status').innerText = data.status || "Pending";
             
             const statusEl = document.getElementById('view-status');
             statusEl.className = "font-bold px-2 py-1 rounded text-xs " + 
                 (data.status === 'Approved' ? 'bg-green-100 text-green-700' : 
-                (data.status === 'Revision Needed' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-700'));
+                (data.status === 'Revision Needed' ? 'bg-orange-100 text-orange-700' : 
+                (data.status === 'Draft' ? 'bg-gray-200 text-gray-700' : 'bg-yellow-100 text-yellow-700')));
 
             const adminSection = document.getElementById('admin-review-section');
             const teacherFeedbackSection = document.getElementById('teacher-feedback-view');
@@ -271,6 +331,8 @@
                 adminSection.classList.remove('hidden');
                 teacherFeedbackSection.classList.add('hidden');
                 document.getElementById('admin-feedback-input').value = data.adminFeedback || "";
+                // Hide admin buttons if it's a Draft
+                if(data.status === 'Draft') adminSection.classList.add('hidden');
             } else {
                 adminSection.classList.add('hidden');
                 if (data.adminFeedback) {
@@ -280,14 +342,20 @@
                     teacherFeedbackSection.classList.add('hidden');
                 }
 
-                // Revision Mode for Teachers
-                if (currentUserRole === 'teacher' && data.status === 'Revision Needed') {
+                // Edit Mode for Teachers (Drafts or Revisions)
+                if (currentUserRole === 'teacher' && (data.status === 'Revision Needed' || data.status === 'Draft')) {
                     document.querySelectorAll('.lesson-input').forEach(el => {
                         el.disabled = false;
                         el.classList.remove('bg-transparent', 'border-0');
                         el.classList.add('border', 'p-2', 'bg-white');
                     });
                     resubmitBtn.classList.remove('hidden');
+                    // Change button text based on status
+                    const btnHtml = data.status === 'Draft' 
+                        ? `<button onclick="updateLessonDraft()" class="flex-1 bg-slate-500 text-white py-2 rounded font-bold hover:bg-slate-600 mr-2">Update Draft</button>
+                           <button onclick="resubmitLessonPlan()" class="flex-1 bg-green-600 text-white py-2 rounded font-bold hover:bg-green-700">Submit for Approval</button>`
+                        : `<button onclick="resubmitLessonPlan()" class="w-full bg-green-600 text-white py-2 rounded font-bold hover:bg-green-700">Submit Revision</button>`;
+                    resubmitBtn.innerHTML = btnHtml;
                 }
             }
             modal.classList.remove('hidden'); modal.classList.add('flex');
@@ -317,31 +385,46 @@
                 showToast(`Lesson Plan marked as ${status}`, "success");
                 logSystemAction(`Lesson Review: Marked ${status}`);
                 closeLessonModal();
-                // Stats auto-update via listeners
             } catch(e) { showToast("Error updating status: " + e.message, "error"); }
+        };
+
+        window.getModalLessonData = () => {
+            return {
+                subject: document.getElementById('view-subject').value,
+                implementationDate: document.getElementById('view-schedule').value,
+                objective: document.getElementById('view-objective').value,
+                materials: document.getElementById('view-materials').value,
+                instruction: document.getElementById('view-instruction').value,
+                guided: document.getElementById('view-guided').value,
+                closure: document.getElementById('view-closure').value,
+                assessment: document.getElementById('view-assessment').value,
+                updatedAt: serverTimestamp()
+            };
         };
 
         window.resubmitLessonPlan = async () => {
             if (!currentViewingDocId) return;
-            showCustomConfirm("Resubmit this lesson plan?", async () => {
+            showCustomConfirm("Submit this lesson plan?", async () => {
                 try {
-                    const updates = {
-                        status: "Pending",
-                        updatedAt: serverTimestamp(),
-                        subject: document.getElementById('view-subject').value,
-                        objective: document.getElementById('view-objective').value,
-                        materials: document.getElementById('view-materials').value,
-                        instruction: document.getElementById('view-instruction').value,
-                        guided: document.getElementById('view-guided').value,
-                        closure: document.getElementById('view-closure').value,
-                        assessment: document.getElementById('view-assessment').value
-                    };
+                    const updates = window.getModalLessonData();
+                    updates.status = "Pending"; // Submit makes it pending
                     await updateDoc(doc(db, "lesson_plans", currentViewingDocId), updates);
-                    showToast("Lesson Plan Resubmitted", "success");
-                    logSystemAction("Teacher resubmitted lesson plan");
+                    showToast("Lesson Plan Submitted", "success");
+                    logSystemAction("Teacher submitted lesson plan");
                     closeLessonModal();
                 } catch(e) { showToast("Error: " + e.message, "error"); }
             });
+        };
+
+        window.updateLessonDraft = async () => {
+            if (!currentViewingDocId) return;
+            try {
+                const updates = window.getModalLessonData();
+                // Status remains Draft
+                await updateDoc(doc(db, "lesson_plans", currentViewingDocId), updates);
+                showToast("Draft Updated", "success");
+                closeLessonModal();
+            } catch(e) { showToast("Error: " + e.message, "error"); }
         };
 
         // --- HISTORY / REPORT MODAL ---
@@ -358,7 +441,7 @@
 
             if (reportType === "Operations") {
                 collectionName = "operations_requests";
-                columns = ["Type", "Item/Loc", "Status", "Start Time", "End Time", "Logged By"];
+                columns = ["Type", "Item/Loc", "Status", "Start Time", "End Time", "Logged By", "Closed By"];
                 statusFilter = ["Done", "Closed", "Returned"];
             } else if (reportType === "Visitors") {
                 collectionName = "visitor_logs";
@@ -403,11 +486,13 @@
                     const t1 = window.formatTimestamp(r.timestamp);
                     const t2 = r.updatedAt ? window.formatTimestamp(r.updatedAt) : '-';
                     const safeUser = (r.submittedBy || r.teacherEmail || "Unknown").split('@')[0];
+                    const safeCloser = (r.closedBy || "-").split('@')[0];
                     
                     const exportRow = { ...r };
                     exportRow.formattedStartTime = t1;
                     exportRow.formattedEndTime = t2;
                     exportRow.loggedByName = safeUser;
+                    exportRow.closedByName = safeCloser;
                     currentReportData.push(exportRow);
 
                     let rowData = "";
@@ -417,7 +502,7 @@
                         const statusColor = r.status === 'Approved' ? 'text-green-600' : (r.status === 'Revision Needed' ? 'text-orange-600' : 'text-gray-500');
                         rowData = `<td class="font-bold ${statusColor}">${r.status || 'Pending'}</td><td>${r.subject}</td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${r.reviewedAt ? window.formatTimestamp(r.reviewedAt) : '-'}</td><td>${safeUser}</td>`;
                     } else if (reportType === "Operations") {
-                        rowData = `<td>${r.type}</td><td>${r.location || r.item}</td><td><span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">${r.status}</span></td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser}</td>`;
+                        rowData = `<td>${r.type}</td><td>${r.location || r.item}</td><td><span class="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">${r.status}</span></td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser}</td><td>${safeCloser}</td>`;
                     } else if (reportType === "Visitors") {
                         rowData = `<td>${r.name}</td><td>${r.purpose}</td><td><span class="text-red-500 font-bold">Out</span></td><td class="whitespace-nowrap">${t1}</td><td class="whitespace-nowrap">${t2}</td><td>${safeUser}</td>`;
                     } else if (reportType === "Incidents") {
@@ -514,8 +599,8 @@
         // ==========================================
         // AUTH & PERSISTENCE
         // ==========================================
-        // Fix: Auto-restore session on refresh
         onAuthStateChanged(auth, async (user) => {
+            const loader = document.getElementById('app-loader');
             if (user) {
                 // User is signed in, check role
                 const docSnap = await getDoc(doc(db, "users", user.email));
@@ -523,15 +608,14 @@
                     const d = docSnap.data();
                     currentUserRole = d.role;
                     currentUserName = d.displayName || user.email.split('@')[0];
-                    if(document.getElementById('login-view').classList.contains('hidden') === false) {
-                        showDashboard(); // Only init dashboard if we were on login screen
-                        showToast(`Session restored for ${currentUserName}`, "success");
-                    }
+                    showDashboard(); 
+                    if(loader) loader.classList.add('hidden');
                 }
             } else {
                 // User is signed out
                 document.getElementById('dashboard-view').classList.add('hidden');
                 document.getElementById('login-view').classList.remove('hidden');
+                if(loader) loader.classList.add('hidden');
                 clearListeners();
             }
         });
@@ -697,6 +781,86 @@
             } catch(e) {}
         }
 
+        window.exportLessonPlans = async (mode) => {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            let q;
+            if(mode === 'all') {
+                // Admin: Only Approved plans
+                q = query(collection(db, "lesson_plans"), where("status", "==", "Approved"), limit(100));
+            } else {
+                q = query(collection(db, "lesson_plans"), where("teacherEmail", "==", auth.currentUser.email), limit(100));
+            }
+            
+            const snap = await getDocs(q);
+            if (snap.empty) return showToast("No lesson plans to export", "error");
+
+            let isFirst = true;
+
+            snap.forEach((docSnap) => {
+                if (!isFirst) doc.addPage();
+                isFirst = false;
+
+                const d = docSnap.data();
+                let y = 20;
+                const pageHeight = doc.internal.pageSize.height;
+                const margin = 20;
+                const contentWidth = 170;
+
+                // Helper to check Y and add page
+                const checkY = (height) => {
+                    if (y + height >= pageHeight - margin) {
+                        doc.addPage();
+                        y = 20;
+                    }
+                };
+
+                // Title
+                doc.setFontSize(18);
+                doc.setFont("helvetica", "bold");
+                const titleLines = doc.splitTextToSize(d.subject || "Untitled", contentWidth);
+                doc.text(titleLines, margin, y);
+                y += (titleLines.length * 10) + 10;
+
+                // Meta
+                doc.setFontSize(10);
+                doc.setFont("helvetica", "normal");
+                doc.text(`Teacher: ${d.teacherEmail}`, margin, y); y += 6;
+                doc.text(`Schedule: ${d.implementationDate ? new Date(d.implementationDate).toLocaleString() : 'Not Scheduled'}`, margin, y); y += 6;
+                doc.text(`Status: ${d.status}`, margin, y); y += 15;
+
+                // Sections
+                const sections = [
+                    { title: "Objective", content: d.objective },
+                    { title: "Materials", content: d.materials },
+                    { title: "Instruction", content: d.instruction },
+                    { title: "Guided Practice", content: d.guided },
+                    { title: "Closure", content: d.closure },
+                    { title: "Assessment", content: d.assessment }
+                ];
+
+                sections.forEach(sec => {
+                    if (sec.content) {
+                        checkY(20);
+                        doc.setFontSize(12);
+                        doc.setFont("helvetica", "bold");
+                        doc.text(sec.title, margin, y);
+                        y += 8;
+
+                        doc.setFontSize(11);
+                        doc.setFont("helvetica", "normal");
+                        const lines = doc.splitTextToSize(sec.content, contentWidth);
+                        checkY(lines.length * 7);
+                        doc.text(lines, margin, y);
+                        y += (lines.length * 7) + 10;
+                    }
+                });
+            });
+
+            doc.save("Lesson_Plans_Export.pdf");
+        }
+
         // 1. TEACHER: LESSON HISTORY (Real-time)
         function subscribeLessonHistory() {
             const container = document.getElementById('lesson-history-list');
@@ -711,61 +875,24 @@
                 
                 let allDocs = [];
                 snapshot.forEach(doc => allDocs.push({id: doc.id, ...doc.data()}));
-                // Manual Sort
-                allDocs.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
-
-                // Filter logic
-                const today = new Date();
-                const day = today.getDay(); 
-                const startOfWeek = new Date(today);
-                startOfWeek.setDate(today.getDate() - day);
-                startOfWeek.setHours(0,0,0,0);
-
-                const thisWeek = [];
-                const older = [];
-
-                allDocs.forEach(data => {
-                    const dDate = data.timestamp ? data.timestamp.toDate() : new Date(0);
-                    if(dDate >= startOfWeek) thisWeek.push(data);
-                    else older.push(data);
+                
+                // Sort by Implementation Schedule (Descending - Newest/Upcoming first)
+                allDocs.sort((a,b) => {
+                    const dateA = a.implementationDate ? new Date(a.implementationDate) : new Date(0);
+                    const dateB = b.implementationDate ? new Date(b.implementationDate) : new Date(0);
+                    return dateB - dateA;
                 });
 
-                const renderItem = (data) => {
-                    const date = window.formatTimestamp(data.timestamp);
-                    const statusColor = data.status === 'Approved' ? 'bg-green-100 text-green-700' : (data.status === 'Revision Needed' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600');
+                allDocs.forEach(data => {
+                    const date = data.implementationDate ? new Date(data.implementationDate).toLocaleDateString() : 'No Date';
+                    const time = data.implementationDate ? new Date(data.implementationDate).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+                    const statusColor = data.status === 'Approved' ? 'bg-green-100 text-green-700' : (data.status === 'Revision Needed' ? 'bg-orange-100 text-orange-700' : (data.status === 'Draft' ? 'bg-gray-200 text-gray-600' : 'bg-yellow-100 text-yellow-700'));
                     const item = document.createElement('div');
                     item.className = "bg-white p-4 rounded shadow-sm border border-gray-100 mb-3 cursor-pointer hover:border-blue-300 transition group";
                     item.onclick = () => window.openLessonModal(data.id, data, false);
-                    item.innerHTML = `<div class="flex justify-between items-start"><div class="overflow-hidden"><h4 class="font-bold text-gray-800 truncate">${data.subject}</h4><p class="text-xs text-gray-500 truncate max-w-[150px]">${data.objective}</p></div><div class="text-right shrink-0"><span class="text-xs px-2 py-1 rounded-full font-bold ${statusColor}">${data.status || 'Pending'}</span><div class="text-xs text-gray-400 mt-1">${date}</div></div></div>`;
-                    return item;
-                };
-
-                // Render This Week
-                if(thisWeek.length > 0) {
-                    container.innerHTML += `<div class="text-xs font-bold text-gray-400 uppercase mb-2 bg-gray-50 p-1 rounded">This Week</div>`;
-                    thisWeek.forEach(d => container.appendChild(renderItem(d)));
-                } else {
-                    container.innerHTML += `<div class="p-2 text-center text-gray-400 text-sm italic mb-4">No plans this week.</div>`;
-                }
-
-                // Render Older Toggle
-                if(older.length > 0) {
-                    const olderContainer = document.createElement('div');
-                    olderContainer.className = "hidden mt-4 border-t pt-2";
-                    olderContainer.innerHTML = `<div class="text-xs font-bold text-gray-400 uppercase mb-2 bg-gray-50 p-1 rounded">Previous Weeks</div>`;
-                    older.forEach(d => olderContainer.appendChild(renderItem(d)));
-
-                    const toggleBtn = document.createElement('button');
-                    toggleBtn.className = "w-full text-xs text-blue-500 hover:bg-blue-50 py-2 rounded mt-2 border border-blue-100";
-                    toggleBtn.innerText = `View Previous Weeks (${older.length})`;
-                    toggleBtn.onclick = function() {
-                        olderContainer.classList.remove('hidden');
-                        this.classList.add('hidden');
-                    };
-
-                    container.appendChild(toggleBtn);
-                    container.appendChild(olderContainer);
-                }
+                    item.innerHTML = `<div class="flex justify-between items-start"><div class="overflow-hidden"><h4 class="font-bold text-gray-800 truncate">${data.subject}</h4><p class="text-xs text-gray-500 truncate max-w-[150px]">${data.objective}</p></div><div class="text-right shrink-0"><span class="text-xs px-2 py-1 rounded-full font-bold ${statusColor}">${data.status || 'Pending'}</span><div class="text-xs text-gray-400 mt-1 font-bold text-blue-600">${date} <br> ${time}</div></div></div>`;
+                    container.appendChild(item);
+                });
             });
             activeListeners.push(unsub);
         }
@@ -902,7 +1029,7 @@
             }));
 
             // Lessons
-            const qLessons = query(collection(db, "lesson_plans"), limit(50));
+            const qLessons = query(collection(db, "lesson_plans"), limit(100)); // Increased limit to ensure we catch enough
             activeListeners.push(onSnapshot(qLessons, (snap) => {
                 const pendingList = document.getElementById('admin-pending-lessons');
                 const approvedList = document.getElementById('admin-approved-lessons');
@@ -917,7 +1044,8 @@
 
                 snap.forEach(doc => {
                     const d = doc.data();
-                    if (d.timestamp.toDate() >= startOfWeek) weekCount++;
+                    // Only count non-drafts within the week
+                    if (d.timestamp && d.timestamp.toDate() >= startOfWeek && d.status !== 'Draft') weekCount++;
                     
                     const item = document.createElement('div');
                     item.className = "p-3 bg-white border rounded hover:bg-gray-50 cursor-pointer flex justify-between items-center";
@@ -1141,8 +1269,10 @@
         // --- PASSWORD UPDATE ---
         window.handlePasswordChange = async (e) => {
             e.preventDefault();
+            const currentPass = document.getElementById('current-password').value;
             const newPass = document.getElementById('new-password').value;
             const confirmPass = document.getElementById('confirm-password').value;
+            
             if (newPass.length < 6) return showToast("Password too short", "error");
             if (newPass !== confirmPass) return showToast("Passwords don't match", "error");
 
@@ -1189,6 +1319,7 @@
         // --- FORMS ---
         window.submitLessonPlan = async () => {
             const subject = document.getElementById('lesson-subject').value;
+            const schedule = document.getElementById('lesson-schedule').value;
             const objective = document.getElementById('lesson-objective').value;
             const materials = document.getElementById('lesson-materials').value;
             const instruction = document.getElementById('lesson-instruction').value;
@@ -1197,6 +1328,7 @@
             const assessment = document.getElementById('lesson-assessment').value;
 
             if(!subject || !objective) return showToast("Subject & Objective required", "error");
+            if(!schedule) return showToast("Schedule required", "error");
             
             const dataPayload = [subject, objective, materials, instruction, guided, closure, assessment];
             const sheetSuccess = await sendToSheet("Archive_Lessons", dataPayload, `Lesson Plan: ${subject}`);
@@ -1205,15 +1337,46 @@
                 try {
                     await addDoc(collection(db, "lesson_plans"), {
                         teacherEmail: auth.currentUser.email,
-                        subject: subject, objective: objective, materials: materials,
+                        subject: subject, 
+                        implementationDate: schedule, // Schedule
+                        objective: objective, materials: materials,
                         instruction: instruction, guided: guided, closure: closure, assessment: assessment,
                         status: "Pending", 
                         timestamp: serverTimestamp()
                     });
                     // Refresh handled by listener
                 } catch(e) { console.error(e); }
-                document.getElementById('lesson-subject').value = ""; document.getElementById('lesson-objective').value = ""; document.getElementById('lesson-materials').value = ""; document.getElementById('lesson-instruction').value = ""; document.getElementById('lesson-guided').value = ""; document.getElementById('lesson-closure').value = ""; document.getElementById('lesson-assessment').value = "";
+                document.getElementById('lesson-subject').value = ""; document.getElementById('lesson-schedule').value = ""; document.getElementById('lesson-objective').value = ""; document.getElementById('lesson-materials').value = ""; document.getElementById('lesson-instruction').value = ""; document.getElementById('lesson-guided').value = ""; document.getElementById('lesson-closure').value = ""; document.getElementById('lesson-assessment').value = "";
             }
+        };
+
+        // NEW: Save Draft Feature
+        window.saveLessonDraft = async () => {
+            const subject = document.getElementById('lesson-subject').value;
+            const schedule = document.getElementById('lesson-schedule').value;
+            const objective = document.getElementById('lesson-objective').value;
+            // Allow saving partial data
+            if(!subject) return showToast("Subject required for draft", "error");
+
+            try {
+                await addDoc(collection(db, "lesson_plans"), {
+                    teacherEmail: auth.currentUser.email,
+                    subject: subject, 
+                    implementationDate: schedule, 
+                    objective: objective, 
+                    materials: document.getElementById('lesson-materials').value,
+                    instruction: document.getElementById('lesson-instruction').value, 
+                    guided: document.getElementById('lesson-guided').value, 
+                    closure: document.getElementById('lesson-closure').value, 
+                    assessment: document.getElementById('lesson-assessment').value,
+                    status: "Draft", 
+                    timestamp: serverTimestamp()
+                });
+                showToast("Saved as Draft", "success");
+                // Don't log system action for drafts as per request
+                // Clear form
+                document.getElementById('lesson-subject').value = ""; document.getElementById('lesson-schedule').value = ""; document.getElementById('lesson-objective').value = ""; document.getElementById('lesson-materials').value = ""; document.getElementById('lesson-instruction').value = ""; document.getElementById('lesson-guided').value = ""; document.getElementById('lesson-closure').value = ""; document.getElementById('lesson-assessment').value = "";
+            } catch(e) { showToast("Error: " + e.message, "error"); }
         };
 
         window.checkMaintType = (select) => {
@@ -1290,6 +1453,11 @@
 </head>
 <body class="bg-gray-100 text-gray-800 font-sans viewport-height overflow-hidden">
 
+    <!-- APP LOADER -->
+    <div id="app-loader" class="fixed inset-0 bg-white z-[100] flex items-center justify-center">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+    </div>
+
     <!-- CREDENTIALS MODAL -->
     <div id="credentials-modal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-[80]">
         <div class="bg-white p-8 rounded-lg shadow-2xl w-96 border-4 border-red-500 m-2">
@@ -1313,9 +1481,9 @@
             </div>
             <div class="flex-1 overflow-y-auto space-y-4 pr-2 no-scrollbar">
                 <div class="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded border">
-                    <div><span class="block text-xs font-bold text-gray-500">SUBJECT</span><input id="view-subject" class="lesson-input w-full bg-transparent border-0 font-bold text-gray-800" disabled></div>
+                    <div class="col-span-2 md:col-span-1"><span class="block text-xs font-bold text-gray-500">SUBJECT</span><input id="view-subject" class="lesson-input w-full bg-transparent border-0 font-bold text-gray-800" disabled></div>
                     <div><span class="block text-xs font-bold text-gray-500">TEACHER</span><span id="view-teacher"></span></div>
-                    <div><span class="block text-xs font-bold text-gray-500">DATE</span><span id="view-date"></span></div>
+                    <div><span class="block text-xs font-bold text-gray-500">SCHEDULE</span><input type="datetime-local" id="view-schedule" class="lesson-input w-full bg-transparent border-0 text-gray-800" disabled></div>
                 </div>
                 
                 <div id="admin-review-section" class="bg-blue-50 p-4 rounded border border-blue-200 hidden"><h4 class="font-bold text-blue-800 mb-2">Admin Review & Action</h4><textarea id="admin-feedback-input" class="w-full border p-2 rounded mb-2 h-20 text-sm" placeholder="Provide comments..."></textarea><div class="flex gap-2 justify-end"><button onclick="submitLessonReview('Revision Needed')" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded text-sm">Request Revision</button><button onclick="submitLessonReview('Approved')" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm font-bold">Approve Plan</button></div></div>
@@ -1334,8 +1502,8 @@
                     </div>
                 </div>
             </div>
-            <div id="lesson-resubmit-btn" class="hidden border-t pt-4 mt-2">
-                <button onclick="resubmitLessonPlan()" class="w-full bg-green-600 text-white py-2 rounded font-bold hover:bg-green-700">Resubmit Lesson Plan</button>
+            <div id="lesson-resubmit-btn" class="hidden border-t pt-4 mt-2 flex gap-2">
+                <!-- Buttons injected by JS -->
             </div>
         </div>
     </div>
@@ -1375,8 +1543,7 @@
                 <div><label class="block text-sm font-bold text-gray-700 mb-1">Section</label><input type="text" id="edit-student-section" class="w-full border p-2 rounded"></div>
             </div>
             <div class="flex justify-end gap-2 mt-6">
-                <button onclick="closeEditStudentModal()" class="px-4 py-2 border rounded hover:bg-gray-100 text-sm">Cancel</button>
-                <button onclick="saveStudentEdit()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-bold">Save Changes</button>
+                <button onclick="closeEditStudentModal()" class="px-4 py-2 border rounded hover:bg-gray-100 text-sm">Cancel</button><button onclick="saveStudentEdit()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-bold">Save Changes</button>
             </div>
         </div>
     </div>
@@ -1391,7 +1558,7 @@
     <div id="sidebar-overlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black bg-opacity-50 z-40 hidden md:hidden"></div>
 
     <!-- VIEW 1: LOGIN -->
-    <div id="login-view" class="flex items-center justify-center h-full bg-slate-800 p-4">
+    <div id="login-view" class="flex items-center justify-center h-full bg-slate-800 p-4 hidden">
         <div class="bg-white p-8 rounded-lg shadow-xl w-full max-w-sm">
             <h2 class="text-2xl font-bold mb-6 text-center text-slate-800">CampusFlow Login</h2>
             <form onsubmit="handleLogin(event)">
@@ -1465,9 +1632,10 @@
                             <div class="flex-1 bg-white p-6 rounded shadow order-2 lg:order-1">
                                 <h3 class="font-bold mb-4 text-lg border-b pb-2">Digital Lesson Planner</h3>
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Subject / Topic</label><input type="text" id="lesson-subject" class="w-full border p-2 rounded" placeholder="e.g. Science - Photosynthesis"></div>
-                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Materials Needed</label><input type="text" id="lesson-materials" class="w-full border p-2 rounded" placeholder="e.g. Projector, Lab Kits, Worksheets"></div>
+                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Subject / Topic</label><input type="text" id="lesson-subject" class="w-full border p-2 rounded" placeholder="Grade 10 - Rizal - Science - Photosynthesis"></div>
+                                    <div><label class="block mb-1 font-bold text-sm text-gray-600">Implementation Schedule</label><input type="datetime-local" id="lesson-schedule" class="w-full border p-2 rounded"></div>
                                 </div>
+                                <label class="block mb-1 font-bold text-sm text-gray-600">Materials Needed</label><input type="text" id="lesson-materials" class="w-full border p-2 rounded mb-4" placeholder="e.g. Projector, Lab Kits">
                                 <label class="block mb-1 font-bold text-sm text-gray-600">Lesson Objectives</label><textarea id="lesson-objective" class="w-full border p-2 mb-4 rounded h-20" placeholder="What will students learn?"></textarea>
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Direct Instruction (I Do)</label><textarea id="lesson-instruction" class="w-full border p-2 rounded h-32" placeholder="Teacher input & modeling..."></textarea></div>
@@ -1477,17 +1645,29 @@
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Closure (You Do)</label><textarea id="lesson-closure" class="w-full border p-2 rounded h-20" placeholder="Independent practice & wrap-up..."></textarea></div>
                                     <div><label class="block mb-1 font-bold text-sm text-gray-600">Assessment</label><textarea id="lesson-assessment" class="w-full border p-2 rounded h-20" placeholder="Exit ticket or quiz..."></textarea></div>
                                 </div>
-                                <button onclick="submitLessonPlan()" class="bg-green-600 text-white px-6 py-3 rounded hover:bg-green-700 transition w-full font-bold">Submit Lesson Plan</button>
+                                <div class="flex gap-2">
+                                    <button onclick="saveLessonDraft()" class="flex-1 bg-gray-500 text-white px-6 py-3 rounded hover:bg-gray-600 font-bold">Save as Draft</button>
+                                    <button onclick="submitLessonPlan()" class="flex-1 bg-green-600 text-white px-6 py-3 rounded hover:bg-green-700 transition w-full font-bold">Submit Lesson Plan</button>
+                                </div>
                             </div>
                             <div class="w-full lg:w-80 bg-white p-4 rounded shadow h-fit order-1 lg:order-2">
-                                <h3 class="font-bold text-gray-700 border-b pb-2 mb-4">My Lesson Plans</h3>
+                                <div class="flex justify-between items-center border-b pb-2 mb-4">
+                                    <h3 class="font-bold text-gray-700">My Lesson Plans</h3>
+                                    <button onclick="exportLessonPlans('my')" class="text-xs text-blue-500 font-bold border border-blue-200 px-2 py-1 rounded hover:bg-blue-50">📥 Export PDF</button>
+                                </div>
                                 <div id="lesson-history-list" class="space-y-3"><p class="text-gray-400 italic text-sm">Loading...</p></div>
                             </div>
                         </div>
                     </div>
                     <div class="admin-view hidden space-y-6">
-                        <div class="grid grid-cols-1 md:grid-cols-1 gap-6"> <!-- Adjusted grid -->
-                            <div class="bg-white p-6 rounded shadow border-l-4 border-blue-500"><h3 class="font-bold text-gray-500 text-xs uppercase">Lesson Plans This Week</h3><div id="stat-lessons-today" class="text-3xl font-bold text-gray-800 mt-1">--</div><div class="text-xs text-gray-400">Since Sunday</div></div>
+                        <div class="grid grid-cols-1 md:grid-cols-1 gap-6"> 
+                            <div class="bg-white p-6 rounded shadow border-l-4 border-blue-500">
+                                <div class="flex justify-between items-center">
+                                    <h3 class="font-bold text-gray-500 text-xs uppercase">Lesson Plans This Week</h3>
+                                    <button onclick="exportLessonPlans('all')" class="text-xs text-blue-500 font-bold border border-blue-200 px-2 py-1 rounded hover:bg-blue-50">📥 Export All PDF</button>
+                                </div>
+                                <div id="stat-lessons-today" class="text-3xl font-bold text-gray-800 mt-1">--</div><div class="text-xs text-gray-400">Since Sunday</div>
+                            </div>
                         </div>
                         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-lg mb-4 border-b pb-2 text-yellow-700">Pending Reviews</h3><div id="admin-pending-lessons" class="space-y-2"><p class="text-gray-400 italic text-sm">Loading...</p></div></div>
@@ -1496,7 +1676,7 @@
                     </div>
                 </div>
 
-                <!-- 2. OPERATIONS -->
+                <!-- 2. MAINTENANCE -->
                 <div id="module-ops" class="content-module hidden">
                     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
                         <div class="flex items-center gap-2"><h2 class="text-2xl font-bold">Maintenance</h2></div>
@@ -1521,12 +1701,15 @@
                                 <button onclick="submitCheckout()" class="bg-slate-600 text-white px-4 py-3 rounded w-full hover:bg-slate-700 font-bold">Log Checkout</button>
                             </div>
                         </div>
-                        <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Active Tasks</h3><div id="ops-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div></div>
+                        <div class="bg-white p-6 rounded shadow h-fit border border-gray-100">
+                            <h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Active Tasks</h3>
+                            <div id="ops-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div>
+                        </div>
                     </div>
                     <div class="admin-view hidden space-y-6">
                         <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-lg mb-4 text-blue-800">Live Operations Monitor (Active)</h3><div id="admin-live-ops" class="space-y-2 grid grid-cols-1 md:grid-cols-2 gap-2">Loading...</div></div>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6"><div class="bg-white p-4 rounded shadow"><div class="text-gray-500 text-xs uppercase font-bold">Open Work Orders</div><div id="stat-open-work-orders" class="text-3xl font-bold text-orange-500">--</div></div></div>
-                        <div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg mb-4">Operations Overview</h3><button onclick="openHistoryModal('Operations')" class="bg-gray-100 text-gray-700 px-4 py-3 rounded border hover:bg-gray-200 w-full md:w-auto font-bold">📂 View All Logs</button></div>
+                        <div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg mb-4">Maintenance History</h3><button onclick="openHistoryModal('Operations')" class="bg-gray-100 text-gray-700 px-4 py-3 rounded border hover:bg-gray-200 w-full md:w-auto font-bold">📂 View Logs</button></div>
                     </div>
                 </div>
 
@@ -1538,7 +1721,7 @@
                     </div>
                     <div id="teacher-safety-view" class="hidden mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded text-center text-yellow-800 text-sm">Visitor logging is restricted to Security personnel. You may only view active reports.</div>
                     <div id="visitor-entry-form" class="employee-view">
-                        <div id="security-monitor-view" class="mb-6"><div class="bg-white p-6 rounded shadow"><h3 class="font-bold text-lg text-green-700 mb-4 flex items-center gap-2">🟢 Live Visitor Monitor <span class="text-xs font-normal text-gray-500 ml-2">(On Campus)</span></h3><div id="visitor-monitor-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div></div></div>
+                        <div id="security-monitor-view" class="mb-6"><div class="bg-white p-6 rounded shadow border border-gray-100"><h3 class="font-bold text-lg text-green-700 mb-4 flex items-center gap-2">🟢 Live Visitor Monitor <span class="text-xs font-normal text-gray-500 ml-2">(On Campus)</span></h3><div id="visitor-monitor-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div></div></div>
                         
                         <div id="visitor-entry-section" class="bg-white p-6 rounded shadow mb-6 relative">
                             <h3 class="font-bold text-lg mb-2">New Visitor Entry</h3>
@@ -1576,7 +1759,10 @@
                             <input type="text" id="clinic-action" placeholder="Action Taken" class="w-full border p-2 mb-4 rounded">
                             <button onclick="submitClinic()" class="bg-red-500 text-white px-6 py-3 rounded hover:bg-red-600 font-bold w-full">Log Visit</button>
                         </div>
-                        <div class="bg-white p-6 rounded shadow h-fit"><h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Currently Admitted</h3><div id="clinic-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div></div>
+                        <div class="bg-white p-6 rounded shadow h-fit border border-gray-100">
+                            <h3 class="font-bold text-gray-700 border-b pb-2 mb-4">Currently Admitted</h3>
+                            <div id="clinic-active-list" class="space-y-2"><p class="text-gray-400">Loading...</p></div>
+                        </div>
                     </div>
                     <div class="admin-view hidden">
                         <div class="bg-white p-6 rounded shadow mb-6"><h3 class="font-bold text-lg mb-4 text-red-700">Currently Admitted Students</h3><div id="admin-live-clinic" class="space-y-2">Loading...</div></div>
@@ -1652,6 +1838,7 @@
                         <h3 class="font-bold mb-4 text-lg">Change Password</h3>
                         <p class="text-sm text-gray-500 mb-4">Enter a new password. Credentials must be saved immediately.</p>
                         <form id="password-form" onsubmit="handlePasswordChange(event)">
+                            <label class="block mb-2 font-bold text-sm text-gray-600">Current Password</label><input type="password" id="current-password" class="w-full border p-2 mb-4 rounded" required>
                             <label class="block mb-2 font-bold text-sm text-gray-600">New Password</label><input type="password" id="new-password" class="w-full border p-2 mb-4 rounded" required minlength="6">
                             <label class="block mb-2 font-bold text-sm text-gray-600">Confirm New Password</label><input type="password" id="confirm-password" class="w-full border p-2 mb-4 rounded" required minlength="6">
                             <button type="submit" id="pwd-btn" class="bg-blue-600 text-white px-6 py-3 rounded hover:bg-blue-700 w-full font-bold">Update Password</button>
